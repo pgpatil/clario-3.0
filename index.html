@@ -1299,6 +1299,16 @@ body.dark body.dark body.dark body.dark body.dark body.dark
               </div>
             </div>
           </div>
+          <!-- Pinned Notes below Matrix -->
+          <div class="card" style="margin-top:10px">
+            <div class="ch"><div class="ct">📌 Pinned Notes</div><button class="btn bg btn-xs" onclick="nav('notes',null)">Notes</button></div>
+            <div class="cb"><div id="pinnedNotes"></div></div>
+          </div>
+          <!-- Upcoming Events below Pinned Notes -->
+          <div class="card" style="margin-top:10px">
+            <div class="ch"><div class="ct">🗓 Upcoming Events</div><button class="btn bg btn-xs" onclick="nav('calendar',null)">Calendar</button></div>
+            <div class="cb"><div id="upcomingEvs"></div></div>
+          </div>
         </div>
 
         <!-- RIGHT COL: Tasks panel — matches height of left col -->
@@ -1335,14 +1345,6 @@ body.dark body.dark body.dark body.dark body.dark body.dark
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:10px">
-          <div class="card">
-            <div class="ch"><div class="ct">📌 Pinned Notes</div><button class="btn bg btn-xs" onclick="nav('notes',null)">Notes</button></div>
-            <div class="cb"><div id="pinnedNotes"></div></div>
-          </div>
-          <div class="card">
-            <div class="ch"><div class="ct">🗓 Upcoming Events</div><button class="btn bg btn-xs" onclick="nav('calendar',null)">Calendar</button></div>
-            <div class="cb"><div id="upcomingEvs"></div></div>
-          </div>
         </div>
       </div>
     </div>
@@ -2146,9 +2148,9 @@ body.dark body.dark body.dark body.dark body.dark body.dark
 
 <script>
 // ── AI key + model override (always enforce correct values) ──
-localStorage.setItem('pc3_aikey', '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');
+localStorage.setItem('pc3_aikey', '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');
 localStorage.setItem('pc3_aimodel', 'nvidia/nemotron-3-nano-30b-a3b:free');
-localStorage.setItem('pc3_aikey', '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'); // always overwrite
+localStorage.setItem('pc3_aikey', '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'); // always overwrite
 
 // ══ DATA ══
 const D_DEPTS=['Engineering','Finance','HR','Strategy','Client Work','Operations','Marketing'];
@@ -2166,10 +2168,11 @@ function persist(){
   localStorage.setItem(_pfx('pc3_notes'),JSON.stringify(notes));
   localStorage.setItem(_pfx('pc3_people'),JSON.stringify(people));
   localStorage.setItem(_pfx('pc3_depts'),JSON.stringify(depts));
+  localStorage.setItem(_pfx('pc3_customers'),JSON.stringify(customers));
   localStorage.setItem(_pfx('pc3_daily'),JSON.stringify(dailyEntries));
   localStorage.setItem(_pfx('pc3_trash'),JSON.stringify(trash));
   localStorage.setItem(_pfx('pc3_audit'),JSON.stringify(auditLog));
-  localStorage.setItem(_pfx('pc3_ids'),JSON.stringify({nT,nE,nP,nN,nPer,nD}));
+  localStorage.setItem(_pfx('pc3_ids'),JSON.stringify({nT,nE,nP,nN,nPer,nD,nC}));
   driveSync(); // auto-sync to Google Drive (debounced 2.5s)
 }let depts=ld('pc3_depts',D_DEPTS);
 let people=ld('pc3_people',D_PEOPLE);
@@ -2909,12 +2912,20 @@ function renderNoteList(){
   const tags=[...new Set(notes.filter(n=>n.tag).map(n=>n.tag))];
   document.getElementById('noteTags').innerHTML=tags.map(t=>`<span class="tag ti" style="cursor:pointer" onclick="filterTag('${t}')">#${t}</span>`).join('');
   // refresh proj/person dropdowns
-  document.getElementById('nLinkProj').innerHTML='<option value="">Link project…</option>'+projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-  document.getElementById('nLinkPerson').innerHTML='<option value="">Link person…</option>'+people.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  // Refresh proj/person dropdowns but preserve current selection
+  const _pSel=document.getElementById('nLinkProj');
+  const _pVal=_pSel?_pSel.value:'';
+  if(_pSel){_pSel.innerHTML='<option value="">Link project…</option>'+projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');_pSel.value=_pVal;}
+  const _perSel=document.getElementById('nLinkPerson');
+  const _perVal=_perSel?_perSel.value:'';
+  if(_perSel){_perSel.innerHTML='<option value="">Link person…</option>'+people.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');_perSel.value=_perVal;}
 }
 function filterTag(tag){document.getElementById('noteSearch').value='#'+tag;renderNoteList();}
-function newNote(){
-  const n={id:nN++,title:'',body:'',tag:'',pinned:false,projectId:null,personId:null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+function newNote(type){
+  type = type || 'plain';
+  const n={id:nN++,title:'',body:NOTE_TEMPLATES[type]||'',tag:'',pinned:false,noteType:type,
+    projectId:null,personId:null,customerId:null,teamMemberId:null,
+    createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
   notes.unshift(n);persist();currentNoteId=n.id;renderNoteList();openNoteById(n.id);showNbEditor();
 }
 // ── Calendar → Notes: create meeting note from event ──
@@ -3036,6 +3047,8 @@ function autoSaveNote(){
     n.tag=document.getElementById('nTag').value.trim().replace(/^#/,'');
     n.projectId=parseInt(document.getElementById('nLinkProj').value)||null;
     n.personId=parseInt(document.getElementById('nLinkPerson').value)||null;
+    const custSel2=document.getElementById('nLinkCust');
+    n.customerId=custSel2?parseInt(custSel2.value)||null:null;
     const teamSel2=document.getElementById('nLinkTeam');
     n.teamMemberId=teamSel2?parseInt(teamSel2.value)||null:null;
     n.updatedAt=new Date().toISOString();
@@ -4901,7 +4914,7 @@ function _testAiKey(){
 }
 function _checkAiKey(){
   // Ensure default key is always set
-  localStorage.setItem('pc3_aikey', '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'); // always overwrite
+  localStorage.setItem('pc3_aikey', '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'); // always overwrite
   const banner = document.getElementById('aiKeyBanner');
   if(!banner) return;
   const stored = localStorage.getItem('pc3_aikey');
@@ -4984,7 +4997,7 @@ Respond concisely. Use bullet points. If suggesting task changes, mention the ta
 
   try{
     
-    const apiKey=localStorage.getItem('pc3_aikey')||'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';
+    const apiKey=localStorage.getItem('pc3_aikey')||'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';
     const resp = await fetch('https://openrouter.ai/api/v1/chat/completions',{
       method:'POST',
       headers:{
@@ -5680,13 +5693,30 @@ window.addEventListener('beforeinstallprompt', e => {
 });
 
 function driveForcePush(){
-  if(!_gAccessToken){ _showToast('⚠️ Sign in first to sync to Drive'); return; }
+  if(!_gAccessToken){
+    _showToast('⚠️ Not connected to Drive. Re-authenticating…');
+    // Try to get a fresh token, then push
+    if(_gTokenClient){
+      _gTokenClient.requestAccessToken({prompt:''});
+      setTimeout(()=>{
+        if(_gAccessToken) driveForcePush();
+        else _showToast('❌ Could not connect to Drive. Try signing out and back in.');
+      }, 3000);
+    }
+    return;
+  }
+  _showToast('⬆️ Pushing to Drive…');
   _gSyncing = false; // force past debounce
   _driveUpload(syncState()).then(()=>{
-    setSyncDot('synced'); updateSyncInfo('Pushed to Drive');
+    setSyncDot('synced'); updateSyncInfo('Pushed to Drive · '+new Date().toLocaleTimeString());
     _updateDriveAdminStatus();
+    localStorage.setItem('pc3_syncedAt', new Date().toISOString());
     _showToast('✅ Data pushed to Google Drive');
-  }).catch(()=>_showToast('❌ Push failed'));
+  }).catch(e=>{
+    setSyncDot('error');
+    _showToast('❌ Push failed: '+(e?.message||'unknown error'));
+    console.warn('driveForcePush error',e);
+  });
 }
 function driveForcePull(){
   if(!_gAccessToken){ _showToast('⚠️ Sign in first to sync from Drive'); return; }
@@ -6683,7 +6713,7 @@ async function _voiceProcessText(text){
   _voiceStop();
   _voiceShowState('Processing');
 
-  const apiKey = localStorage.getItem('pc3_aikey') || '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';
+  const apiKey = localStorage.getItem('pc3_aikey') || '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';
 
   // Build context lists for Claude to match against
   const deptList   = depts.join(', ') || 'none';
@@ -6948,7 +6978,7 @@ if(document.readyState === 'loading'){
   _appStart(); // DOM already ready
 }
 function _appStart(){
-  localStorage.setItem('pc3_aikey', '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'); // always overwrite
+  localStorage.setItem('pc3_aikey', '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'); // always overwrite
   init();
   _gBoot();
   // ── Auto-sync every 3 minutes ──
