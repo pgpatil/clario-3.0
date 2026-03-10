@@ -1135,6 +1135,7 @@ body.dark body.dark body.dark body.dark body.dark body.dark
       <div class="ni" onclick="nav('tasks',this)"><span class="ico">✅</span>Tasks<span class="nb" id="taskBadge">0</span></div>
       <div class="ni" onclick="nav('projects',this)"><span class="ico">📁</span>Projects</div>
       <div class="ni" onclick="nav('notes',this)"><span class="ico">📝</span>Notes</div>
+      <div class="ni" onclick="nav('calls',this)"><span class="ico">📞</span>Calls<span class="nb" id="callsBadge" style="background:var(--acc)">0</span></div>
     </div>
     <div class="sb-sec-hdr" onclick="toggleSbSec('schedule')"><span>Schedule</span><span class="sb-caret" id="sb-caret-schedule">▾</span></div>
     <div class="sb-sec-body" id="sb-body-schedule">
@@ -1299,7 +1300,12 @@ body.dark body.dark body.dark body.dark body.dark body.dark
               </div>
             </div>
           </div>
-          <!-- Pinned Notes below Matrix -->
+          <!-- Today's Calls widget -->
+          <div class="card" style="margin-top:10px" id="dw-calls">
+            <div class="ch"><div class="ct">📞 Today's Calls</div><button class="btn bg btn-xs" onclick="nav('calls',null)">All Calls</button></div>
+            <div class="cb" style="padding:8px 14px"><div id="todayCallsList"></div></div>
+          </div>
+          <!-- Pinned Notes below Calls -->
           <div class="card" style="margin-top:10px">
             <div class="ch"><div class="ct">📌 Pinned Notes</div><button class="btn bg btn-xs" onclick="nav('notes',null)">Notes</button></div>
             <div class="cb"><div id="pinnedNotes"></div></div>
@@ -1372,9 +1378,9 @@ body.dark body.dark body.dark body.dark body.dark body.dark
         <div class="ftabs" id="taskFtabs">
           <button class="ftab active" onclick="setTF('all',this)">All</button>
           <button class="ftab" onclick="setTF('pending',this)">Pending</button>
-          <button class="ftab" onclick="setTF('done',this)">Done</button>
-          <button class="ftab" onclick="setTF('high',this)">High</button>
+          <button class="ftab" onclick="setTF('high',this)">High Priority</button>
           <button class="ftab" onclick="setTF('archived',this)">✅ Completed</button>
+          <button class="ftab" id="hideCompBtn" onclick="toggleHideComp(this)" title="Toggle completed visibility" style="margin-left:6px;font-size:11px">👁 Hide Done</button>
         </div>
         <button class="btn bp btn-sm" style="margin-left:auto" onclick="openTaskModal()">+ Task</button>
         <button class="export-btn" onclick="exportSection('tasks')">📊 Export</button>
@@ -1502,6 +1508,19 @@ body.dark body.dark body.dark body.dark body.dark body.dark
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- CALLS / CALLBACK LIST -->
+    <div class="view" id="view-calls">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <div id="callFtabs" style="display:flex;gap:4px">
+          <button class="ftab active" id="callTab-pending" onclick="setCallFilter('pending',this)">📞 Pending</button>
+          <button class="ftab" id="callTab-all" onclick="setCallFilter('all',this)">All</button>
+          <button class="ftab" id="callTab-done" onclick="setCallFilter('done',this)">✅ Done</button>
+        </div>
+        <button class="btn bp btn-sm" style="margin-left:auto" onclick="openCallModal()">+ Add Call</button>
+      </div>
+      <div id="callList" style="display:flex;flex-direction:column;gap:4px"></div>
     </div>
 
     <!-- DAILY PLANNER -->
@@ -2169,10 +2188,11 @@ function persist(){
   localStorage.setItem(_pfx('pc3_people'),JSON.stringify(people));
   localStorage.setItem(_pfx('pc3_depts'),JSON.stringify(depts));
   localStorage.setItem(_pfx('pc3_customers'),JSON.stringify(customers));
+  localStorage.setItem(_pfx('pc3_calls'),JSON.stringify(calls));
   localStorage.setItem(_pfx('pc3_daily'),JSON.stringify(dailyEntries));
   localStorage.setItem(_pfx('pc3_trash'),JSON.stringify(trash));
   localStorage.setItem(_pfx('pc3_audit'),JSON.stringify(auditLog));
-  localStorage.setItem(_pfx('pc3_ids'),JSON.stringify({nT,nE,nP,nN,nPer,nD,nC}));
+  localStorage.setItem(_pfx('pc3_ids'),JSON.stringify({nT,nE,nP,nN,nPer,nD,nC,nCl}));
   driveSync(); // auto-sync to Google Drive (debounced 2.5s)
 }let depts=ld('pc3_depts',D_DEPTS);
 let people=ld('pc3_people',D_PEOPLE);
@@ -2181,11 +2201,12 @@ let events=ld('pc3_events',D_EVENTS);
 let projects=ld('pc3_projs',D_PROJS);
 let notes=ld('pc3_notes',D_NOTES);
 let customers=ld('pc3_customers',D_CUSTOMERS);
+let calls=ld('pc3_calls',[]);
 let dailyEntries=ld('pc3_daily',[]);
 let trash=ld('pc3_trash',{tasks:[],events:[],notes:[],projects:[]});
 let auditLog=ld('pc3_audit',[]);
-let ids=ld('pc3_ids',{nT:1,nE:1,nP:1,nN:1,nPer:1,nD:1,nC:1});
-let nT=ids.nT||1,nE=ids.nE||1,nP=ids.nP||1,nN=ids.nN||1,nPer=ids.nPer||1,nD=ids.nD||1,nC=ids.nC||1;
+let ids=ld('pc3_ids',{nT:1,nE:1,nP:1,nN:1,nPer:1,nD:1,nC:1,nCl:1});
+let nT=ids.nT||1,nE=ids.nE||1,nP=ids.nP||1,nN=ids.nN||1,nPer=ids.nPer||1,nD=ids.nD||1,nC=ids.nC||1,nCl=ids.nCl||1;
 
 // ══ AUDIT ══
 function logAction(type,entity,title){
@@ -2196,10 +2217,20 @@ function logAction(type,entity,title){
 // ══ AUTO-ARCHIVE ══
 function autoArchive(){
   const now=new Date();
-  if(now.getDay()===0){
-    tasks.forEach(t=>{if(t.done&&!t.archived&&t.completedAt){const c=new Date(t.completedAt);if((now-c)/(1000*60*60*24)>=7)t.archived=true;}});
-    persist();
-  }
+  let changed=false;
+  tasks.forEach(t=>{
+    // Any completed task with no completedAt timestamp — set it now
+    if(t.done&&!t.completedAt){ t.completedAt=new Date().toISOString(); changed=true; }
+    // Archive done tasks that haven't been archived yet, after 24 hours
+    if(t.done&&!t.archived&&t.completedAt){
+      const hrs=(now-new Date(t.completedAt))/(1000*60*60);
+      if(hrs>=24){ t.archived=true; changed=true; }
+    }
+    // Also immediately archive any done task that was done before archive logic existed
+    // (legacy: done=true but archived=false and no completedAt)
+    if(t.done&&!t.archived&&!t.completedAt){ t.archived=true; changed=true; }
+  });
+  if(changed) persist();
 }
 
 // ══ UTILS ══
@@ -2238,15 +2269,15 @@ function setMobNav(id){
 }
 
 // ══ FAB ══
-const fabActions={dashboard:()=>openTaskModal(),tasks:()=>openTaskModal(),projects:()=>openProjModal(),notes:()=>newNote(),daily:()=>openDailyModal(),calendar:()=>openEventModal(),planner:()=>openEventModal(),team:()=>openPersonModal(),departments:()=>openDeptModal(),customers:()=>openCustModal(),persontasks:()=>openTaskModal(),depttasks:null,trash:null,audit:null,analytics:null,install:null};
+const fabActions={dashboard:()=>openTaskModal(),tasks:()=>openTaskModal(),projects:()=>openProjModal(),notes:()=>newNote(),calls:()=>openCallModal(),daily:()=>openDailyModal(),calendar:()=>openEventModal(),planner:()=>openEventModal(),team:()=>openPersonModal(),departments:()=>openDeptModal(),customers:()=>openCustModal(),persontasks:()=>openTaskModal(),depttasks:null,trash:null,audit:null,analytics:null,install:null};
 function fabAction(){const a=fabActions[currentView];if(a)a();}
 
 // ══ NAV ══
 let currentView='dashboard';
-const vTitles={dashboard:'Dashboard',analytics:'Analytics',tasks:'Tasks',projects:'Projects',notes:'Notes',daily:'Daily Planner',calendar:'Calendar',planner:'Planner',persontasks:'Person Tasks',depttasks:'Dept Tasks',team:'People',departments:'Departments',customers:'Customers',trash:'Trash',audit:'Audit Log'};
+const vTitles={dashboard:'Dashboard',analytics:'Analytics',tasks:'Tasks',projects:'Projects',notes:'Notes',calls:'Calls',daily:'Daily Planner',calendar:'Calendar',planner:'Planner',persontasks:'Person Tasks',depttasks:'Dept Tasks',team:'People',departments:'Departments',customers:'Customers',trash:'Trash',audit:'Audit Log'};
 function nav(id,el){
   // Auto-expand sidebar section containing this view
-  const _viewSection={tasks:'work',projects:'work',notes:'work',
+  const _viewSection={tasks:'work',projects:'work',notes:'work',calls:'work',
     daily:'schedule',calendar:'schedule',planner:'schedule',
     team:'team',departments:'team',customers:'team',persontasks:'team',depttasks:'team',
     dashboard:'overview',analytics:'overview',
@@ -2261,7 +2292,7 @@ function nav(id,el){
   else{const found=Array.from(document.querySelectorAll('.ni')).find(n=>n.getAttribute('onclick')&&n.getAttribute('onclick').includes("'"+id+"'"));if(found)found.classList.add('active');}
   document.getElementById('pageTitle').textContent=vTitles[id]||id;
   currentView=id;
-  const btnMap={dashboard:'+ Task',tasks:'+ Task',projects:'+ Project',notes:'+ Note',daily:'+ Entry',calendar:'+ Event',team:'+ Person',departments:'+ Dept',customers:'+ Customer'};
+  const btnMap={dashboard:'+ Task',tasks:'+ Task',projects:'+ Project',notes:'+ Note',calls:'+ Call',daily:'+ Entry',calendar:'+ Event',team:'+ Person',departments:'+ Dept',customers:'+ Customer'};
   const tb=document.getElementById('topBtn');
   if(btnMap[id]){tb.style.display='';tb.textContent=btnMap[id];}else tb.style.display='none';
   // FAB removed — + New button in topbar handles all actions
@@ -2295,7 +2326,7 @@ function _quickPopOutside(e){
 
 function renderView(id){
   updateStats();
-  ({dashboard:renderDashboard,tasks:renderTasks,projects:renderProjects,notes:renderNoteList,daily:renderDaily,calendar:renderCalendar,planner:renderPlanner,team:renderTeam,departments:renderDepts,customers:renderCustomers,trash:renderTrash,audit:renderAudit,admin:renderAdmin,analytics:renderAnalytics,persontasks:renderPersonTasks,depttasks:renderDeptTasks})[id]?.();
+  ({dashboard:renderDashboard,tasks:renderTasks,projects:renderProjects,notes:renderNoteList,daily:renderDaily,calendar:renderCalendar,planner:renderPlanner,team:renderTeam,departments:renderDepts,customers:renderCustomers,calls:renderCalls,trash:renderTrash,audit:renderAudit,admin:renderAdmin,analytics:renderAnalytics,persontasks:renderPersonTasks,depttasks:renderDeptTasks})[id]?.();
 }
 
 // ══ QUICK ADD ══
@@ -2321,6 +2352,8 @@ function updateStats(){
   const tc=(trash.tasks?.length||0)+(trash.events?.length||0)+(trash.notes?.length||0)+(trash.projects?.length||0);
   document.getElementById('trashBadge').textContent=tc;
   document.getElementById('custBadge').textContent=customers.length;
+  const _cbEl=document.getElementById('callsBadge');
+  if(_cbEl){const _pc=calls.filter(c=>c.status!=='done'&&c.date&&c.date<=todayStr()).length;_cbEl.style.display=_pc?'':'none';_cbEl.textContent=_pc;}
   updateOverdueBanner();
 }
 
@@ -2500,6 +2533,141 @@ function _noteContactConfirm(){
   document.getElementById('_noteContactPop')?.remove();
 }
 
+
+// ══════════════════════════════════════════════════════
+// ══ CALLS / CALLBACK LIST ══
+// ══════════════════════════════════════════════════════
+let callFilter = 'pending'; // pending | done | all
+
+function renderCalls(){
+  const td = todayStr();
+  let list = [...calls].sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999'));
+  if(callFilter==='pending') list=list.filter(c=>c.status!=='done');
+  else if(callFilter==='done') list=list.filter(c=>c.status==='done');
+
+  // Filter tabs active state
+  document.querySelectorAll('#callFtabs .ftab').forEach(t=>t.classList.remove('active'));
+  const activeTab=document.getElementById('callTab-'+callFilter);
+  if(activeTab) activeTab.classList.add('active');
+
+  const el=document.getElementById('callList');
+  if(!el) return;
+  if(!list.length){
+    el.innerHTML='<div style="color:var(--t4);font-size:13px;padding:20px 0;text-align:center">'+
+      (callFilter==='pending'?'📞 No pending callbacks. Great job!':'No calls here yet.')+
+      '</div>';
+    return;
+  }
+  el.innerHTML=list.map(c=>{
+    const isToday=c.date===td;
+    const isOverdue=c.date&&c.date<td&&c.status!=='done';
+    const isDone=c.status==='done';
+    return `<div class="tr2" style="opacity:${isDone?.6:1};border-left:3px solid ${isOverdue?'var(--red)':isToday?'var(--acc)':'var(--border)'};padding-left:10px;margin-bottom:6px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;color:var(--t3)':''}">${c.name}</span>
+          ${c.phone?`<a href="tel:${c.phone}" style="font-size:11px;color:var(--acc);text-decoration:none">📱 ${c.phone}</a>`:''}
+          ${isToday&&!isDone?'<span style="font-size:10px;background:var(--acc-l);color:var(--acc);border-radius:10px;padding:1px 7px;font-weight:700">Today</span>':''}
+          ${isOverdue?'<span style="font-size:10px;background:var(--red-l);color:var(--red);border-radius:10px;padding:1px 7px;font-weight:700">Overdue</span>':''}
+          ${isDone?'<span style="font-size:10px;background:var(--grn-l);color:var(--grn);border-radius:10px;padding:1px 7px;font-weight:700">✅ Done</span>':''}
+        </div>
+        ${c.desc?`<div style="font-size:12px;color:var(--t3);margin-top:3px">${c.desc}</div>`:''}
+        ${c.date?`<div style="font-size:11px;color:${isOverdue?'var(--red)':isToday?'var(--acc)':'var(--t4)'};margin-top:2px">📅 ${fmtDate(c.date)}</div>`:''}
+      </div>
+      <div style="display:flex;gap:5px;flex-shrink:0">
+        ${!isDone?`<button class="btn btn-xs" style="background:var(--grn-l);color:var(--grn);border:1px solid var(--grn);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:11px" onclick="markCallDone(${c.id})">✓ Done</button>`
+          :`<button class="btn bg btn-xs" onclick="markCallPending(${c.id})">↩ Reopen</button>`}
+        <button class="btn bg btn-xs" onclick="openCallModal(${c.id})">Edit</button>
+        <button class="db" onclick="deleteCall(${c.id})">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function setCallFilter(f){
+  callFilter=f;
+  renderCalls();
+}
+
+function markCallDone(id){
+  const c=calls.find(c=>c.id===id);if(!c)return;
+  c.status='done';c.doneAt=new Date().toISOString();
+  persist();renderCalls();renderDashboard();
+  _showToast('✅ Call marked done');
+}
+
+function markCallPending(id){
+  const c=calls.find(c=>c.id===id);if(!c)return;
+  c.status='pending';c.doneAt=null;
+  persist();renderCalls();renderDashboard();
+}
+
+function deleteCall(id){
+  if(!confirm('Delete this call?'))return;
+  calls=calls.filter(c=>c.id!==id);
+  persist();renderCalls();renderDashboard();
+}
+
+function openCallModal(id){
+  const c=id?calls.find(c=>c.id===id):null;
+  const m=document.getElementById('callModal');
+  if(!m)return;
+  document.getElementById('callModalTitle').textContent=c?'Edit Call':'New Callback';
+  document.getElementById('cm-name').value=c?c.name:'';
+  document.getElementById('cm-phone').value=c?c.phone||'':'';
+  document.getElementById('cm-desc').value=c?c.desc||'':'';
+  document.getElementById('cm-date').value=c?c.date||todayStr():todayStr();
+  document.getElementById('cm-id').value=c?c.id:'';
+  m.style.display='flex';
+  setTimeout(()=>document.getElementById('cm-name').focus(),100);
+}
+
+function closeCallModal(){
+  const m=document.getElementById('callModal');if(m)m.style.display='none';
+}
+
+function saveCall(){
+  const id=parseInt(document.getElementById('cm-id').value)||null;
+  const name=document.getElementById('cm-name').value.trim();
+  if(!name){_showToast('⚠️ Name is required');return;}
+  const data={
+    name, phone:document.getElementById('cm-phone').value.trim(),
+    desc:document.getElementById('cm-desc').value.trim(),
+    date:document.getElementById('cm-date').value||todayStr(),
+    status:'pending'
+  };
+  if(id){
+    const c=calls.find(c=>c.id===id);
+    if(c){Object.assign(c,data);c.updatedAt=new Date().toISOString();}
+  } else {
+    calls.unshift({...data,id:nCl++,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  }
+  persist();closeCallModal();renderCalls();renderDashboard();
+  _showToast(id?'✅ Call updated':'📞 Callback added');
+}
+
+function renderTodayCallsWidget(){
+  const td=todayStr();
+  const todayCalls=calls.filter(c=>c.date===td&&c.status!=='done');
+  const overdueCalls=calls.filter(c=>c.date&&c.date<td&&c.status!=='done');
+  const all=[...overdueCalls,...todayCalls];
+  const el=document.getElementById('todayCallsList');
+  if(!el)return;
+  if(!all.length){
+    el.innerHTML='<div style="color:var(--t4);font-size:12px;padding:6px 0">No calls scheduled for today 👍</div>';
+    return;
+  }
+  el.innerHTML=all.map(c=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}</div>
+      ${c.phone?`<div style="font-size:11px;color:var(--acc)">${c.phone}</div>`:''}
+      ${c.desc?`<div style="font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.desc}</div>`:''}
+      ${c.date<td?'<div style="font-size:10px;color:var(--red);font-weight:600">Overdue</div>':''}
+    </div>
+    <button class="btn btn-xs" style="background:var(--grn-l);color:var(--grn);border:1px solid var(--grn);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px;flex-shrink:0" onclick="markCallDone(${c.id});renderTodayCallsWidget()">✓</button>
+  </div>`).join('');
+}
+
 function renderDashboard(){
   _populateDashFilters();
   updateStats();
@@ -2600,17 +2768,20 @@ function renderDashboard(){
   const uel=document.getElementById('upcomingEvs');
   if(!uev.length)uel.innerHTML='<div style="color:var(--t4);font-size:13px">No upcoming events.</div>';
   else uel.innerHTML=uev.map(ev=>{const d=new Date(ev.date+'T12:00:00');return`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);align-items:center"><div style="text-align:center;min-width:30px"><div style="font-size:17px;font-weight:800;line-height:1;color:${catColor[ev.cat]}">${d.getDate()}</div><div style="font-size:9px;color:var(--t4);text-transform:uppercase">${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}</div></div><div style="flex:1"><div style="font-size:13px;font-weight:600">${ev.title}</div><div style="font-size:11px;color:var(--t3)">${ev.time}${ev.desc?' · '+ev.desc:''}</div></div></div>`;}).join('');
+  renderTodayCallsWidget();
 }
 function qToggle(id){
   const t=tasks.find(t=>t.id===id);if(!t)return;
   t.done=!t.done;
   if(t.done){
     t.completedAt=new Date().toISOString();
-    t.archived=true; // auto-archive completed tasks
+    t.archived=true; // immediately move to Completed tab
     logAction('complete','task',t.title);
+    _showToast('✅ Task completed — moved to Completed tab');
   } else {
     t.completedAt=null;
-    t.archived=false; // unarchive on un-complete
+    t.archived=false; // restore to active
+    _showToast('↩️ Task restored to active');
   }
   persist();
   if(currentView==='dashboard')renderDashboard();
@@ -2620,6 +2791,14 @@ function qToggle(id){
 
 // ══ TASKS ══
 let taskFilter='all';
+let hideCompletedTasks = localStorage.getItem('pc3_hidecomp')==='1';
+function toggleHideComp(el){
+  hideCompletedTasks=!hideCompletedTasks;
+  localStorage.setItem('pc3_hidecomp', hideCompletedTasks?'1':'0');
+  el.textContent = hideCompletedTasks ? '👁 Show Done' : '👁 Hide Done';
+  el.classList.toggle('active', hideCompletedTasks);
+  renderTasks();
+}
 function setTF(f,el){taskFilter=f;document.querySelectorAll('#taskFtabs .ftab').forEach(t=>t.classList.remove('active'));el.classList.add('active');renderTasks();}
 let taskSortField='due',taskSortDir=1;
 function setTaskSort(f,el){taskSortField=f;document.querySelectorAll('#view-tasks .sort-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');renderTasks();}
@@ -2640,6 +2819,8 @@ function renderTasks(){
   else if(taskFilter==='high')list=list.filter(t=>t.priority==='high'&&!t.archived);
   else if(taskFilter==='archived')list=list.filter(t=>t.archived);
   else list=list.filter(t=>!t.archived);
+  // Hide done (but not yet archived) tasks if toggle is on
+  if(hideCompletedTasks && taskFilter!=='archived') list=list.filter(t=>!t.done);
   if(pp.value)list=list.filter(t=>(t.personIds||[t.personId]).includes(parseInt(pp.value)));
   if(dp.value)list=list.filter(t=>t.dept===dp.value);
   if(cv)list=list.filter(t=>t.customerId==cv);
@@ -2703,7 +2884,22 @@ function renderTasks(){
   const badge=document.getElementById('matrixTaskCount');
   if(badge){const a=tasks.filter(t=>!t.done&&!t.archived);badge.textContent=a.length+' tasks';}
 }
-function toggleTask(id){const t=tasks.find(t=>t.id===id);if(!t)return;t.done=!t.done;if(t.done){t.completedAt=new Date().toISOString();t.archived=true;logAction('complete','task',t.title);spawnRecurring(t);}else{t.completedAt=null;t.archived=false;}persist();renderTasks();updateStats();updateOverdueBanner();}
+function toggleTask(id){
+  const t=tasks.find(t=>t.id===id);if(!t)return;
+  t.done=!t.done;
+  if(t.done){
+    t.completedAt=new Date().toISOString();
+    t.archived=true; // immediately move to Completed tab
+    logAction('complete','task',t.title);
+    spawnRecurring(t);
+    _showToast('✅ Task completed — moved to Completed tab');
+  } else {
+    t.completedAt=null;
+    t.archived=false;
+    _showToast('↩️ Task restored to active');
+  }
+  persist();renderTasks();updateStats();updateOverdueBanner();
+}
 function deleteTask(id,fromModal=false){const t=tasks.find(t=>t.id===id);if(!t)return;trash.tasks.push({...t,deletedAt:new Date().toISOString()});tasks=tasks.filter(t=>t.id!==id);logAction('delete','task',t.title);persist();if(fromModal)closeTaskModal();renderTasks();renderDashboard();updateStats();}
 function deleteTaskFromModal(){deleteTask(editingTaskId,true);}
 
@@ -3222,7 +3418,19 @@ function renderCalMiniCal(){
   const d2=new Date(selDay+'T12:00:00');dp.textContent=d2.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
   const dayEvs=events.filter(e=>e.date===selDay).sort((a,b)=>a.time.localeCompare(b.time));
   dsub.textContent=dayEvs.length+' event'+(dayEvs.length!==1?'s':'');
-  document.getElementById('dpBody').innerHTML=dayEvs.length?dayEvs.map(ev=>`<div class="dp-item"><div class="dp-time">${ev.time}</div><div style="flex:1"><div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:${catColor[ev.cat]};flex-shrink:0"></span>${ev.title}</div>${ev.desc?`<div style="font-size:11px;color:var(--t3);margin-top:2px">${ev.desc}</div>`:''}</div><button class="btn bg btn-xs" onclick="openEventEdit(${ev.id})">Edit</button><button class="btn bg btn-xs" style="background:var(--pur-l);color:var(--pur);border:1px solid var(--pur)" onclick="newNoteFromEvent(${ev.id})" title="Take meeting notes">📝 Notes</button></div>`).join(''):'<div style="color:var(--t4);font-size:13px;padding:10px 0">No events.</div>';
+  // Events section
+  const evHtml = dayEvs.length
+    ? dayEvs.map(ev=>`<div class="dp-item"><div class="dp-time">${ev.time||'—'}</div><div style="flex:1"><div style="font-size:13px;font-weight:600;display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:${catColor[ev.cat]};flex-shrink:0"></span>${ev.title}</div>${ev.desc?`<div style="font-size:11px;color:var(--t3);margin-top:2px">${ev.desc}</div>`:''}</div><button class="btn bg btn-xs" onclick="openEventEdit(${ev.id})">Edit</button><button class="btn bg btn-xs" style="background:var(--pur-l);color:var(--pur);border:1px solid var(--pur)" onclick="newNoteFromEvent(${ev.id})" title="Take meeting notes">📝 Notes</button></div>`).join('')
+    : '<div style="color:var(--t4);font-size:13px;padding:4px 0">No events.</div>';
+  // Tasks due on selected day
+  const dayTasks = tasks.filter(t=>!t.archived && t.due===selDay).sort((a,b)=>{const o={high:0,med:1,low:2};return (o[a.priority]||1)-(o[b.priority]||1);});
+  const taskHtml = dayTasks.length
+    ? dayTasks.map(t=>`<div class="dp-item" style="border-left:3px solid ${t.priority==='high'?'var(--red)':t.priority==='med'?'var(--amb)':'var(--grn)'}"><div class="dp-time" style="font-size:10px;color:${t.priority==='high'?'var(--red)':t.priority==='med'?'var(--amb)':'var(--grn)'}">${t.priority.toUpperCase()}</div><div style="flex:1"><div class="tt ${t.done?'dk':''}" style="font-size:13px;font-weight:600">${t.done?'✅ ':''} ${t.title}</div>${t.dept||t.projectId?`<div style="font-size:10px;color:var(--t3);margin-top:2px">${t.dept||''} ${t.projectId?(projects.find(p=>p.id===t.projectId)||{}).name||'':''}</div>`:''}</div><button class="btn bg btn-xs" onclick="openTaskEdit(${t.id})">Edit</button><button class="btn btn-xs" style="background:var(--grn-l);color:var(--grn);border:1px solid var(--grn);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px" onclick="toggleTask(${t.id});renderCalMiniCal()">${t.done?'↩ Undo':'✓ Done'}</button></div>`).join('')
+    : '<div style="color:var(--t4);font-size:13px;padding:4px 0">No tasks due.</div>';
+  document.getElementById('dpBody').innerHTML=
+    '<div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📅 Events</div>'+evHtml+
+    '<div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px">✅ Tasks Due</div>'+taskHtml;
+  dsub.textContent=dayEvs.length+' event'+(dayEvs.length!==1?'s':'')+' · '+dayTasks.length+' task'+(dayTasks.length!==1?'s':'')+' due';
 }
 function renderMonthCal(){
   const y=calDate.getFullYear(),m=calDate.getMonth();
@@ -5896,7 +6104,7 @@ const JBIN_API = 'https://api.jsonbin.io/v3';
 // Free API key — rate limited but fine for personal use
 const JBIN_KEY = '$2a$10$WafE8cYWpGSs602RRnxAdeFnnuv6ULuwrbJZ8/Ckk6C3n6VQ3Fhju';
 
-function syncState(){return{tasks,events,projects,notes,people,depts,customers,dailyEntries,trash,auditLog,ids:{nT,nE,nP,nN,nPer,nD,nC},syncedAt:new Date().toISOString()};}
+function syncState(){return{tasks,events,projects,notes,people,depts,customers,calls,dailyEntries,trash,auditLog,ids:{nT,nE,nP,nN,nPer,nD,nC,nCl},syncedAt:new Date().toISOString()};}
 
 let _driveSyncTimer=null;
 function _scheduleDriveSync(){
@@ -6118,6 +6326,9 @@ function checkSyncParam(){
 // ══ INIT ══
 function init(){
   autoArchive();updateStats();
+  // Restore hide-completed button state
+  const hcb=document.getElementById('hideCompBtn');
+  if(hcb&&hideCompletedTasks){hcb.textContent='👁 Show Done';hcb.classList.add('active');}
   document.getElementById('todayLbl').textContent=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
   renderView('dashboard');
   checkSyncParam();
@@ -6396,6 +6607,7 @@ async function _driveLoad(){
       _r(people,       data.people||[]);
       _r(customers,    data.customers||[]);
       _r(depts,        data.depts||[]);
+      _r(calls,        data.calls||[]);
       _r(dailyEntries, data.dailyEntries||[]);
       _r(auditLog,     data.auditLog||[]);
       trash = data.trash||{tasks:[],events:[],notes:[],projects:[]};
@@ -7694,5 +7906,37 @@ function _appStart(){
   </div>
 </div>
 
-</body>
+    <!-- CALL MODAL -->
+    <div id="callModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center;padding:16px">
+      <div style="background:var(--surf);border-radius:var(--r);padding:20px;width:100%;max-width:420px;box-shadow:var(--shm)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div style="font-size:15px;font-weight:700" id="callModalTitle">New Callback</div>
+          <button onclick="closeCallModal()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t3)">✕</button>
+        </div>
+        <input type="hidden" id="cm-id">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <label style="font-size:11px;color:var(--t3);font-weight:600">PERSON / COMPANY *</label>
+            <input class="fi" id="cm-name" placeholder="Who to call…" style="width:100%;box-sizing:border-box;margin-top:3px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--t3);font-weight:600">PHONE (optional)</label>
+            <input class="fi" id="cm-phone" placeholder="+91 98765 43210" type="tel" style="width:100%;box-sizing:border-box;margin-top:3px">
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--t3);font-weight:600">DESCRIPTION / REASON</label>
+            <textarea class="fi" id="cm-desc" placeholder="What to discuss…" rows="3" style="width:100%;box-sizing:border-box;margin-top:3px;resize:vertical"></textarea>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--t3);font-weight:600">DATE TO CALL</label>
+            <input class="fi" id="cm-date" type="date" style="width:100%;box-sizing:border-box;margin-top:3px">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn bp" style="flex:1" onclick="saveCall()">💾 Save</button>
+            <button class="btn bg" onclick="closeCallModal()">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
 </html>
