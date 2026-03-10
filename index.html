@@ -236,6 +236,16 @@ body.dark .matrix-task-row:hover{background:rgba(255,255,255,.14);}
 /* ── STATS ── */
 /* stats-row: see DASHBOARD LAYOUT block */
 .sc{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;display:flex;align-items:center;gap:8px;box-shadow:var(--sh);}
+.calls-strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
+.calls-strip::-webkit-scrollbar{display:none;}
+.call-card{flex-shrink:0;width:200px;background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;box-shadow:var(--sh);display:flex;flex-direction:column;gap:4px;position:relative;cursor:default;}
+.call-card.today{border-color:var(--acc);background:var(--acc-l);}
+.call-card.overdue{border-color:var(--red);background:var(--red-l);}
+.call-card.done{opacity:.55;background:var(--surf2);}
+.call-card-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.call-card-desc{font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.call-card-date{font-size:10px;font-weight:600;}
+.call-card-actions{display:flex;gap:5px;margin-top:4px;}
 .si{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;}
 .sv{font-size:18px;font-weight:800;line-height:1.1;}
 .sl{font-size:10px;color:var(--t3);font-weight:500;}
@@ -1004,6 +1014,16 @@ body.dark body.dark body.dark body.dark body.dark body.dark
 .dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 /* Compact stat cards */
 .sc{background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:8px 10px;display:flex;align-items:center;gap:8px;box-shadow:var(--sh);}
+.calls-strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
+.calls-strip::-webkit-scrollbar{display:none;}
+.call-card{flex-shrink:0;width:200px;background:var(--surf);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;box-shadow:var(--sh);display:flex;flex-direction:column;gap:4px;position:relative;cursor:default;}
+.call-card.today{border-color:var(--acc);background:var(--acc-l);}
+.call-card.overdue{border-color:var(--red);background:var(--red-l);}
+.call-card.done{opacity:.55;background:var(--surf2);}
+.call-card-name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.call-card-desc{font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.call-card-date{font-size:10px;font-weight:600;}
+.call-card-actions{display:flex;gap:5px;margin-top:4px;}
 .si{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;}
 .sv{font-size:18px;font-weight:800;line-height:1.1;}
 .sl{font-size:10px;color:var(--t3);font-weight:500;}
@@ -1240,12 +1260,17 @@ body.dark body.dark body.dark body.dark body.dark body.dark
       <div id="dashWidgetBar" style="display:none;background:var(--surf2);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;margin-bottom:8px;font-size:12px"><div id="dashWidgetToggles" style="display:flex;flex-wrap:wrap;gap:8px"></div></div>
 
       <!-- ── Stats row ── -->
-      <div class="stats-row">
-        <div class="sc" onclick="drillStat('all')" style="cursor:pointer"><div class="si" style="background:var(--acc-l);color:var(--acc)">✅</div><div><div class="sv" id="s-total">0</div><div class="sl">Total</div></div></div>
-        <div class="sc" onclick="drillStat('pending')" style="cursor:pointer"><div class="si" style="background:var(--amb-l);color:var(--amb)">⏳</div><div><div class="sv" id="s-pending">0</div><div class="sl">Pending</div></div></div>
-        <div class="sc" onclick="drillStat('pending')" style="cursor:pointer"><div class="si" style="background:var(--red-l);color:var(--red)">⚠️</div><div><div class="sv" id="s-overdue">0</div><div class="sl">Overdue</div></div></div>
-        <div class="sc"><div class="si" style="background:var(--grn-l);color:var(--grn)">📅</div><div><div class="sv" id="s-events">0</div><div class="sl">Events</div></div></div>
-        <div class="sc"><div class="si" style="background:var(--pur-l);color:var(--pur)">📁</div><div><div class="sv" id="s-proj">0</div><div class="sl">Projects</div></div></div>
+      <!-- ── Calls Strip (replaces stat cards) ── -->
+      <div class="calls-strip-wrap" style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:12px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.4px">📞 Calls &amp; Callbacks</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:11px;color:var(--t4)" id="callsStripMeta"></span>
+            <button class="btn bp btn-xs" onclick="openCallModal()">+ Add</button>
+            <button class="btn bg btn-xs" onclick="nav('calls',null)">View All</button>
+          </div>
+        </div>
+        <div class="calls-strip" id="callsStrip"></div>
       </div>
 
       <!-- ── Today at a Glance ── -->
@@ -2343,11 +2368,7 @@ function quickAdd(e){
 // ══ STATS ══
 function updateStats(){
   const td=todayStr();
-  document.getElementById('s-total').textContent=tasks.filter(t=>!t.archived).length;
-  document.getElementById('s-pending').textContent=tasks.filter(t=>!t.done&&!t.archived).length;
-  document.getElementById('s-overdue').textContent=tasks.filter(t=>!t.done&&!t.archived&&t.due&&t.due<td).length;
-  document.getElementById('s-events').textContent=events.length;
-  document.getElementById('s-proj').textContent=projects.length;
+  // Stats cards removed — data used only for badges and overdue banner
   document.getElementById('taskBadge').textContent=tasks.filter(t=>!t.done&&!t.archived).length;
   const tc=(trash.tasks?.length||0)+(trash.events?.length||0)+(trash.notes?.length||0)+(trash.projects?.length||0);
   document.getElementById('trashBadge').textContent=tc;
@@ -2668,9 +2689,61 @@ function renderTodayCallsWidget(){
   </div>`).join('');
 }
 
+
+function renderCallsStrip(){
+  const td=todayStr();
+  const strip=document.getElementById('callsStrip');
+  const meta=document.getElementById('callsStripMeta');
+  if(!strip)return;
+
+  // Sort: overdue first, then today, then future, then done
+  const sorted=[...calls].sort((a,b)=>{
+    const rank=c=>c.status==='done'?3:c.date<td?0:c.date===td?1:2;
+    return rank(a)-rank(b)||(a.date||'').localeCompare(b.date||'');
+  });
+
+  const pending=calls.filter(c=>c.status!=='done');
+  const todayCount=calls.filter(c=>c.status!=='done'&&c.date===td).length;
+  const overdueCount=calls.filter(c=>c.status!=='done'&&c.date&&c.date<td).length;
+  if(meta){
+    const parts=[];
+    if(overdueCount)parts.push(`<span style="color:var(--red);font-weight:700">${overdueCount} overdue</span>`);
+    if(todayCount)parts.push(`<span style="color:var(--acc);font-weight:700">${todayCount} today</span>`);
+    if(pending.length-overdueCount-todayCount>0)parts.push(`${pending.length-overdueCount-todayCount} upcoming`);
+    meta.innerHTML=parts.join(' · ')||'<span style="color:var(--grn)">All clear ✓</span>';
+  }
+
+  if(!sorted.length){
+    strip.innerHTML='<div style="color:var(--t4);font-size:13px;padding:10px 0">No calls yet. Click + Add to create your first callback.</div>';
+    return;
+  }
+
+  strip.innerHTML=sorted.map(c=>{
+    const isToday=c.date===td;
+    const isOverdue=c.date&&c.date<td&&c.status!=='done';
+    const isDone=c.status==='done';
+    const cls=isDone?'done':isOverdue?'overdue':isToday?'today':'';
+    const dateColor=isOverdue?'color:var(--red)':isToday?'color:var(--acc)':'color:var(--t4)';
+    const dateLabel=isOverdue?'⚠ '+fmtDate(c.date):isToday?'📞 Today':c.date?'📅 '+fmtDate(c.date):'';
+    return `<div class="call-card ${cls}">
+      <div class="call-card-name" title="${c.name}">${isDone?'✅ ':isOverdue?'🔴 ':isToday?'📞 ':''}${c.name}</div>
+      ${c.phone?`<div style="font-size:11px;color:var(--acc)"><a href="tel:${c.phone}" style="color:var(--acc);text-decoration:none">📱 ${c.phone}</a></div>`:''}
+      ${c.desc?`<div class="call-card-desc" title="${c.desc}">${c.desc}</div>`:''}
+      ${dateLabel?`<div class="call-card-date" style="${dateColor}">${dateLabel}</div>`:''}
+      <div class="call-card-actions">
+        ${!isDone
+          ?`<button class="btn btn-xs" style="background:var(--grn-l);color:var(--grn);border:1px solid var(--grn);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px" onclick="markCallDone(${c.id});renderCallsStrip()">✓ Done</button>`
+          :`<button class="btn bg btn-xs" onclick="markCallPending(${c.id});renderCallsStrip()" style="font-size:10px">↩ Reopen</button>`
+        }
+        <button class="btn bg btn-xs" onclick="openCallModal(${c.id})" style="font-size:10px">Edit</button>
+      </div>
+    </div>`;
+  }).join('');
+}
 function renderDashboard(){
   _populateDashFilters();
   updateStats();
+  renderCallsStrip();
   renderFocusWidget();
   renderMatrix();
   updateOverdueBanner();
