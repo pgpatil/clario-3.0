@@ -5975,28 +5975,25 @@ window.addEventListener('beforeinstallprompt', e => {
 
 function driveForcePush(){
   if(!_gAccessToken){
-    _showToast('⚠️ Not connected to Drive. Re-authenticating…');
-    // Try to get a fresh token, then push
-    if(_gTokenClient){
-      _gTokenClient.requestAccessToken({prompt:''});
-      setTimeout(()=>{
-        if(_gAccessToken) driveForcePush();
-        else _showToast('❌ Could not connect to Drive. Try signing out and back in.');
-      }, 3000);
-    }
+    _showToast('⚠️ Not signed in to Google Drive. Please sign in first.');
     return;
   }
+  setSyncDot('syncing');
+  updateSyncInfo('Pushing…');
   _showToast('⬆️ Pushing to Drive…');
-  _gSyncing = false; // force past debounce
-  _driveUpload(syncState()).then(()=>{
-    setSyncDot('synced'); updateSyncInfo('Pushed to Drive · '+new Date().toLocaleTimeString());
+  _gSyncing = false; // bypass debounce guard
+  const payload = syncState();
+  _driveUpload(payload).then(()=>{
+    setSyncDot('synced');
+    updateSyncInfo('Pushed to Drive · '+new Date().toLocaleTimeString());
     _updateDriveAdminStatus();
     localStorage.setItem('pc3_syncedAt', new Date().toISOString());
     _showToast('✅ Data pushed to Google Drive');
   }).catch(e=>{
     setSyncDot('error');
-    _showToast('❌ Push failed: '+(e?.message||'unknown error'));
-    console.warn('driveForcePush error',e);
+    updateSyncInfo('Push failed');
+    _showToast('❌ Push failed — check your connection and try again');
+    console.error('driveForcePush error',e);
   });
 }
 function driveForcePull(){
@@ -6660,7 +6657,9 @@ function driveSync(){
       setSyncDot('error');
       updateSyncInfo('Drive sync failed');
       console.warn('Drive sync error', e);
-    } finally{ _gSyncing = false; }
+    } finally{
+      _gSyncing = false; // always release lock
+    }
   }, 1500);
 }
 
@@ -6686,7 +6685,7 @@ async function _driveLoad(){
       trash = data.trash||{tasks:[],events:[],notes:[],projects:[]};
       if(data.ids){
         nT=data.ids.nT||1; nE=data.ids.nE||1; nP=data.ids.nP||1;
-        nN=data.ids.nN||1; nPer=data.ids.nPer||1; nD=data.ids.nD||1; nC=data.ids.nC||1;
+        nN=data.ids.nN||1; nPer=data.ids.nPer||1; nD=data.ids.nD||1; nC=data.ids.nC||1; nCl=data.ids.nCl||1;
       }
       persist(); // write to localStorage as offline cache
       renderView(currentView||'dashboard');
