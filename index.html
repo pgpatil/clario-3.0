@@ -5974,62 +5974,66 @@ window.addEventListener('beforeinstallprompt', e => {
 });
 
 function driveForcePush(){
-  if(!_gAccessToken){
-    // Try to restore from localStorage first
-    const saved = localStorage.getItem(_G_TOKEN_KEY);
-    if(saved){
-      _gAccessToken = saved;
-    } else {
-      _showToast('⚠️ Not signed in to Google Drive. Please sign in first.');
-      return;
-    }
-  }
-  _gSyncing = false; // release any stuck lock
-  setSyncDot('syncing');
-  updateSyncInfo('Pushing to Drive…');
-  _showToast('⬆️ Pushing to Drive…');
-  const payload = syncState();
-  _driveUpload(payload).then(()=>{
-    setSyncDot('synced');
-    updateSyncInfo('Pushed · '+new Date().toLocaleTimeString());
-    _updateDriveAdminStatus();
-    localStorage.setItem('pc3_syncedAt', new Date().toISOString());
-    _showToast('✅ Pushed to Google Drive successfully');
-  }).catch(e=>{
-    setSyncDot('error');
-    updateSyncInfo('Push failed');
-    // If 401, token expired — request fresh token then retry once
-    if(e.message && e.message.includes('401')){
-      _showToast('🔄 Token expired — refreshing and retrying…');
-      const _retry=()=>{
-        if(!_gTokenClient){ _showToast('❌ Push failed — please sign out and back in'); return; }
-        _gTokenClient.requestAccessToken({prompt:''});
-        setTimeout(()=>{ if(_gAccessToken) driveForcePush(); },2000);
-      };
-      _retry();
-    } else {
+  // If we have a fresh in-memory token, push immediately
+  if(_gAccessToken){
+    _gSyncing = false;
+    setSyncDot('syncing');
+    updateSyncInfo('Pushing to Drive…');
+    _showToast('⬆️ Pushing to Drive…');
+    _driveUpload(syncState()).then(()=>{
+      setSyncDot('synced');
+      updateSyncInfo('Pushed · '+new Date().toLocaleTimeString());
+      _updateDriveAdminStatus();
+      localStorage.setItem('pc3_syncedAt', new Date().toISOString());
+      _showToast('✅ Pushed to Google Drive successfully');
+    }).catch(e=>{
+      setSyncDot('error');
+      updateSyncInfo('Push failed: '+(e.message||'unknown'));
       _showToast('❌ Push failed: '+(e.message||'unknown error'));
-    }
-    console.error('driveForcePush error',e);
-  });
+      console.error('driveForcePush error',e);
+      // Token expired mid-session — clear it so next push re-auths
+      if(e.message&&(e.message.includes('401')||e.message.includes('failed'))){
+        _gAccessToken=null; _gDriveFileId=null;
+      }
+    });
+    return;
+  }
+  // No fresh token — check if user has a session (i.e. already consented)
+  const sess=localStorage.getItem(_G_SESSION_KEY);
+  if(!sess){ _showToast('⚠️ Please sign in first to sync with Google Drive.'); return; }
+  // Request a fresh token silently, then push once we have it
+  _showToast('🔄 Getting Drive access… push will follow automatically.');
+  window._pendingPush=true;
+  const _req=()=>{
+    if(!_gTokenClient){ _initTokenClient(); setTimeout(_req,500); return; }
+    _gTokenClient.requestAccessToken({prompt:''});
+  };
+  _req();
 }
 function driveForcePull(){
-  if(!_gAccessToken){
-    const saved=localStorage.getItem(_G_TOKEN_KEY);
-    if(saved){ _gAccessToken=saved; }
-    else { _showToast('⚠️ Not signed in to Google Drive. Please sign in first.'); return; }
-  }
   if(!confirm('Pull from Drive? This will overwrite your local data with the cloud version.')) return;
-  setSyncDot('syncing');
-  updateSyncInfo('Pulling from Drive…');
-  _driveLoad().then(()=>{
-    _showToast('✅ Data pulled from Google Drive');
-    _updateDriveAdminStatus();
-  }).catch(e=>{
-    setSyncDot('error');
-    _showToast('❌ Pull failed: '+(e?.message||'unknown error'));
-    console.error('driveForcePull error',e);
-  });
+  if(_gAccessToken){
+    setSyncDot('syncing');
+    updateSyncInfo('Pulling from Drive…');
+    _driveLoad().then(()=>{
+      _showToast('✅ Data pulled from Google Drive');
+      _updateDriveAdminStatus();
+    }).catch(e=>{
+      setSyncDot('error');
+      _showToast('❌ Pull failed: '+(e?.message||'unknown error'));
+      console.error('driveForcePull error',e);
+    });
+    return;
+  }
+  const sess=localStorage.getItem(_G_SESSION_KEY);
+  if(!sess){ _showToast('⚠️ Please sign in first to sync with Google Drive.'); return; }
+  _showToast('🔄 Getting Drive access… pull will follow automatically.');
+  window._pendingPull=true;
+  const _req=()=>{
+    if(!_gTokenClient){ _initTokenClient(); setTimeout(_req,500); return; }
+    _gTokenClient.requestAccessToken({prompt:''});
+  };
+  _req();
 }
 function _updateDriveAdminStatus(){
   const infoEl = document.getElementById('syncInfoAdmin');
@@ -6626,37 +6630,53 @@ async function _getDriveFileId(){
 
 // Upload data to Drive (create or update)
 async function _driveUpload(payload){
+  if(!_gAccessToken) throw new Error('No Drive token — please sign in');
   const body = JSON.stringify(payload);
-  const fileId = await _getDriveFileId();
-  let url, method;
-  if(fileId){
-    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`;
-    method = 'PATCH';
-  } else {
-    // Create with metadata first
-    const meta = await fetch(
+  let fileId = await _getDriveFileId();
+
+  if(!fileId){
+    // File doesn't exist yet — create it in appDataFolder
+    const createResp = await fetch(
       'https://www.googleapis.com/drive/v3/files',
       {
         method: 'POST',
-        headers: { Authorization: 'Bearer '+_gAccessToken, 'Content-Type':'application/json' },
+        headers: {
+          Authorization: 'Bearer '+_gAccessToken,
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({ name: _DRIVE_FILE, parents: ['appDataFolder'] })
       }
     );
-    const mdata = await meta.json();
-    _gDriveFileId = mdata.id;
-    url = `https://www.googleapis.com/upload/drive/v3/files/${_gDriveFileId}?uploadType=media`;
-    method = 'PATCH';
+    if(!createResp.ok){
+      if(createResp.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); }
+      const t=await createResp.text().catch(()=>'');
+      throw new Error('Drive create failed: '+createResp.status+' '+t.slice(0,80));
+    }
+    const created = await createResp.json();
+    _gDriveFileId = created.id;
+    fileId = _gDriveFileId;
   }
-  const uploadResp = await fetch(url, {
-    method,
-    headers: { Authorization: 'Bearer '+_gAccessToken, 'Content-Type':'application/json' },
-    body
-  });
+
+  // Upload content
+  const uploadResp = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: 'Bearer '+_gAccessToken,
+        'Content-Type': 'application/json'
+      },
+      body
+    }
+  );
   if(!uploadResp.ok){
     const errText = await uploadResp.text().catch(()=>'');
-    // Token expired (401) — clear cached token so next attempt re-authenticates
-    if(uploadResp.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); _gDriveFileId=null; }
-    throw new Error('Drive upload failed: '+uploadResp.status+' '+errText.slice(0,100));
+    if(uploadResp.status===401){
+      _gAccessToken=null;
+      localStorage.removeItem(_G_TOKEN_KEY);
+      _gDriveFileId=null;
+    }
+    throw new Error('Drive upload failed: '+uploadResp.status+' '+errText.slice(0,80));
   }
 }
 
@@ -6770,12 +6790,35 @@ function _initTokenClient(){
         return;
       }
       _gAccessToken = tokenResp.access_token;
-      // Store token for restore on next page load
-      localStorage.setItem(_G_TOKEN_KEY, tokenResp.access_token);
-      // Token expiry: Google tokens last 1 hour. Schedule refresh at 50 min.
+      // Mark that we have consent (for boot detection) — NOT for reuse as auth header
+      localStorage.setItem(_G_TOKEN_KEY, '1');
+      // Schedule silent refresh before 1-hour expiry
       clearTimeout(window._tokenRefreshTimer);
       window._tokenRefreshTimer = setTimeout(_autoRefreshToken, 50*60*1000);
-      // Load cloud data (merges Drive → local)
+      // If a push was queued (e.g. user hit Push before token was ready), do it now
+      if(window._pendingPush){
+        window._pendingPush=false;
+        await _driveUpload(syncState()).then(()=>{
+          setSyncDot('synced');
+          updateSyncInfo('Pushed · '+new Date().toLocaleTimeString());
+          _updateDriveAdminStatus();
+          localStorage.setItem('pc3_syncedAt', new Date().toISOString());
+          _showToast('✅ Pushed to Google Drive successfully');
+        }).catch(e=>{
+          setSyncDot('error');
+          _showToast('❌ Push failed after auth: '+(e.message||'unknown'));
+        });
+        return;
+      }
+      // If a pull was queued
+      if(window._pendingPull){
+        window._pendingPull=false;
+        await _driveLoad();
+        _showToast('✅ Data pulled from Google Drive');
+        _updateDriveAdminStatus();
+        return;
+      }
+      // Normal flow: load cloud data on sign-in
       await _driveLoad();
     }
   });
@@ -6882,13 +6925,11 @@ function _gBoot(){
         localStorage.setItem(_G_SESSION_KEY, _rolled);
         try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_rolled)+';max-age='+(90*24*3600)+';path=/;SameSite=Strict'; }catch(e){}
         // Get fresh Drive token in background — if it fails, we still show the app
-        // Restore saved token immediately for instant sync (avoids round-trip delay)
-        const savedToken = localStorage.getItem(_G_TOKEN_KEY);
-        if(savedToken){ _gAccessToken = savedToken; driveSync(); }
-        // Also do a silent OAuth refresh in background to get a fresh token
+        // Request a fresh Drive token silently (no popup if user already authorised)
+        // Never reuse a stored token — Google tokens expire after 1 hour
         const _tryToken = () => {
           if(!_gTokenClient){ _initTokenClient(); setTimeout(_tryToken, 500); return; }
-          _gTokenClient.requestAccessToken({ prompt:'' }); // silent — no popup if already authorised
+          _gTokenClient.requestAccessToken({ prompt:'' });
         };
         if(window._gsiReady) setTimeout(_tryToken, 800);
         else { setTimeout(()=>{ _initTokenClient(); setTimeout(_tryToken,500); }, 1000); }
