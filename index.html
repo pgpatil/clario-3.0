@@ -5975,31 +5975,61 @@ window.addEventListener('beforeinstallprompt', e => {
 
 function driveForcePush(){
   if(!_gAccessToken){
-    _showToast('⚠️ Not signed in to Google Drive. Please sign in first.');
-    return;
+    // Try to restore from localStorage first
+    const saved = localStorage.getItem(_G_TOKEN_KEY);
+    if(saved){
+      _gAccessToken = saved;
+    } else {
+      _showToast('⚠️ Not signed in to Google Drive. Please sign in first.');
+      return;
+    }
   }
+  _gSyncing = false; // release any stuck lock
   setSyncDot('syncing');
-  updateSyncInfo('Pushing…');
+  updateSyncInfo('Pushing to Drive…');
   _showToast('⬆️ Pushing to Drive…');
-  _gSyncing = false; // bypass debounce guard
   const payload = syncState();
   _driveUpload(payload).then(()=>{
     setSyncDot('synced');
-    updateSyncInfo('Pushed to Drive · '+new Date().toLocaleTimeString());
+    updateSyncInfo('Pushed · '+new Date().toLocaleTimeString());
     _updateDriveAdminStatus();
     localStorage.setItem('pc3_syncedAt', new Date().toISOString());
-    _showToast('✅ Data pushed to Google Drive');
+    _showToast('✅ Pushed to Google Drive successfully');
   }).catch(e=>{
     setSyncDot('error');
     updateSyncInfo('Push failed');
-    _showToast('❌ Push failed — check your connection and try again');
+    // If 401, token expired — request fresh token then retry once
+    if(e.message && e.message.includes('401')){
+      _showToast('🔄 Token expired — refreshing and retrying…');
+      const _retry=()=>{
+        if(!_gTokenClient){ _showToast('❌ Push failed — please sign out and back in'); return; }
+        _gTokenClient.requestAccessToken({prompt:''});
+        setTimeout(()=>{ if(_gAccessToken) driveForcePush(); },2000);
+      };
+      _retry();
+    } else {
+      _showToast('❌ Push failed: '+(e.message||'unknown error'));
+    }
     console.error('driveForcePush error',e);
   });
 }
 function driveForcePull(){
-  if(!_gAccessToken){ _showToast('⚠️ Sign in first to sync from Drive'); return; }
+  if(!_gAccessToken){
+    const saved=localStorage.getItem(_G_TOKEN_KEY);
+    if(saved){ _gAccessToken=saved; }
+    else { _showToast('⚠️ Not signed in to Google Drive. Please sign in first.'); return; }
+  }
   if(!confirm('Pull from Drive? This will overwrite your local data with the cloud version.')) return;
-  _driveLoad().then(()=>{ _showToast('✅ Data pulled from Google Drive'); _updateDriveAdminStatus(); });
+  setSyncDot('syncing');
+  updateSyncInfo('Pulling from Drive…');
+  _driveLoad().then(()=>{
+    _showToast('✅ Data pulled from Google Drive');
+    _updateDriveAdminStatus();
+  }).catch(e=>{
+    setSyncDot('error');
+    _showToast('❌ Pull failed: '+(e?.message||'unknown error'));
+    console.error('driveForcePull error',e);
+  });
 }
 function _updateDriveAdminStatus(){
   const infoEl = document.getElementById('syncInfoAdmin');
@@ -6582,6 +6612,10 @@ async function _getDriveFileId(){
     'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&q=name%3D%22clario3_data.json%22',
     { headers: { Authorization: 'Bearer ' + _gAccessToken } }
   );
+  if(!r.ok){
+    if(r.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); }
+    throw new Error('Drive file lookup failed: '+r.status);
+  }
   const data = await r.json();
   if(data.files && data.files.length > 0){
     _gDriveFileId = data.files[0].id;
@@ -6613,11 +6647,17 @@ async function _driveUpload(payload){
     url = `https://www.googleapis.com/upload/drive/v3/files/${_gDriveFileId}?uploadType=media`;
     method = 'PATCH';
   }
-  await fetch(url, {
+  const uploadResp = await fetch(url, {
     method,
     headers: { Authorization: 'Bearer '+_gAccessToken, 'Content-Type':'application/json' },
     body
   });
+  if(!uploadResp.ok){
+    const errText = await uploadResp.text().catch(()=>'');
+    // Token expired (401) — clear cached token so next attempt re-authenticates
+    if(uploadResp.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); _gDriveFileId=null; }
+    throw new Error('Drive upload failed: '+uploadResp.status+' '+errText.slice(0,100));
+  }
 }
 
 // Download data from Drive
@@ -6628,7 +6668,10 @@ async function _driveDownload(){
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
     { headers: { Authorization: 'Bearer '+_gAccessToken } }
   );
-  if(!r.ok) return null;
+  if(!r.ok){
+    if(r.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); _gDriveFileId=null; }
+    throw new Error('Drive download failed: '+r.status);
+  }
   return await r.json();
 }
 
@@ -6727,7 +6770,12 @@ function _initTokenClient(){
         return;
       }
       _gAccessToken = tokenResp.access_token;
+      // Store token for restore on next page load
       localStorage.setItem(_G_TOKEN_KEY, tokenResp.access_token);
+      // Token expiry: Google tokens last 1 hour. Schedule refresh at 50 min.
+      clearTimeout(window._tokenRefreshTimer);
+      window._tokenRefreshTimer = setTimeout(_autoRefreshToken, 50*60*1000);
+      // Load cloud data (merges Drive → local)
       await _driveLoad();
     }
   });
@@ -6779,7 +6827,7 @@ function _bypassSignIn(){
 }
 
 function _reloadLocalData(){
-  const ids2 = ld('pc3_ids', {nT:1,nE:1,nP:1,nN:1,nPer:1,nD:1,nC:1});
+  const ids2 = ld('pc3_ids', {nT:1,nE:1,nP:1,nN:1,nPer:1,nD:1,nC:1,nCl:1});
   const _r = (arr, val) => { arr.splice(0, arr.length, ...(val||[])); };
   _r(tasks,        ld('pc3_tasks',[]));
   _r(events,       ld('pc3_events',[]));
@@ -6788,11 +6836,12 @@ function _reloadLocalData(){
   _r(people,       ld('pc3_people',[]));
   _r(customers,    ld('pc3_customers',[]));
   _r(depts,        ld('pc3_depts',[]));
+  _r(calls,        ld('pc3_calls',[]));
   _r(dailyEntries, ld('pc3_daily',[]));
   _r(auditLog,     ld('pc3_audit',[]));
   trash = ld('pc3_trash',{tasks:[],events:[],notes:[],projects:[]});
   nT=ids2.nT||1; nE=ids2.nE||1; nP=ids2.nP||1; nN=ids2.nN||1;
-  nPer=ids2.nPer||1; nD=ids2.nD||1; nC=ids2.nC||1;
+  nPer=ids2.nPer||1; nD=ids2.nD||1; nC=ids2.nC||1; nCl=ids2.nCl||1;
   renderView(currentView||'dashboard');
   updateStats();
 }
@@ -6833,9 +6882,13 @@ function _gBoot(){
         localStorage.setItem(_G_SESSION_KEY, _rolled);
         try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_rolled)+';max-age='+(90*24*3600)+';path=/;SameSite=Strict'; }catch(e){}
         // Get fresh Drive token in background — if it fails, we still show the app
+        // Restore saved token immediately for instant sync (avoids round-trip delay)
+        const savedToken = localStorage.getItem(_G_TOKEN_KEY);
+        if(savedToken){ _gAccessToken = savedToken; driveSync(); }
+        // Also do a silent OAuth refresh in background to get a fresh token
         const _tryToken = () => {
           if(!_gTokenClient){ _initTokenClient(); setTimeout(_tryToken, 500); return; }
-          _gTokenClient.requestAccessToken({ prompt:'' });
+          _gTokenClient.requestAccessToken({ prompt:'' }); // silent — no popup if already authorised
         };
         if(window._gsiReady) setTimeout(_tryToken, 800);
         else { setTimeout(()=>{ _initTokenClient(); setTimeout(_tryToken,500); }, 1000); }
