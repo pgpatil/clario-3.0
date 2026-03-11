@@ -1912,6 +1912,7 @@ body.dark body.dark body.dark body.dark body.dark body.dark
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn bp btn-sm" onclick="driveForcePush()">⬆️ Push to Drive now</button>
             <button class="btn bg btn-sm" onclick="driveForcePull()">⬇️ Pull from Drive</button>
+            <button class="btn btn-sm" style="background:#f59e0b;color:#fff" onclick="_reAuthAndPush()">🔑 Re-authorize Drive</button>
           </div>
           <div style="margin-top:10px;font-size:11px;color:var(--t4)">
             Data is stored in a hidden app folder in your Google Drive — only Clario 3.0 can access it.
@@ -6007,9 +6008,11 @@ window.addEventListener('beforeinstallprompt', e => {
 });
 
 function driveForcePush(){
-  // If we have a fresh in-memory token, push immediately
   if(_gAccessToken){
-    _gSyncing = false;
+    // Validate token looks real before using it
+    const tokenPreview = _gAccessToken ? _gAccessToken.slice(0,12)+'…' : 'NONE';
+    console.log('[Clario] Push — token:', tokenPreview, '| fileId:', _gDriveFileId||localStorage.getItem('pc3_driveFileId')||'none');
+    _gSyncing=false;
     setSyncDot('syncing');
     updateSyncInfo('Pushing to Drive…');
     _showToast('⬆️ Pushing to Drive…');
@@ -6017,25 +6020,28 @@ function driveForcePush(){
       setSyncDot('synced');
       updateSyncInfo('Pushed · '+new Date().toLocaleTimeString());
       _updateDriveAdminStatus();
-      localStorage.setItem('pc3_syncedAt', new Date().toISOString());
+      localStorage.setItem('pc3_syncedAt',new Date().toISOString());
       _showToast('✅ Pushed to Google Drive successfully');
     }).catch(e=>{
       setSyncDot('error');
-      updateSyncInfo('Push failed: '+(e.message||'unknown'));
-      _showToast('❌ Push failed: '+(e.message||'unknown error'));
-      console.error('driveForcePush error',e);
-      // Token expired mid-session — clear it so next push re-auths
-      if(e.message&&(e.message.includes('401')||e.message.includes('failed'))){
-        _gAccessToken=null; _gDriveFileId=null;
+      const msg=e.message||'unknown';
+      console.error('[Clario] Push failed:',e);
+      // Diagnose the error type
+      if(msg.includes('Failed to fetch')){
+        // Network-level failure — token may be expired or invalid
+        _gAccessToken=null; // force re-auth on next attempt
+        _showToast('❌ Network error — re-authorizing Drive…');
+        setTimeout(()=>_reAuthAndPush(), 500);
+      } else {
+        updateSyncInfo('Push failed: '+msg);
+        _showToast('❌ Push failed: '+msg);
       }
     });
     return;
   }
-  // No fresh token — check if user has a session (i.e. already consented)
   const sess=localStorage.getItem(_G_SESSION_KEY);
   if(!sess){ _showToast('⚠️ Please sign in first to sync with Google Drive.'); return; }
-  // Request a fresh token silently, then push once we have it
-  _showToast('🔄 Getting Drive access… push will follow automatically.');
+  _showToast('🔄 Getting Drive access… push will follow.');
   window._pendingPush=true;
   const _req=()=>{
     if(!_gTokenClient){ _initTokenClient(); setTimeout(_req,500); return; }
@@ -6043,6 +6049,19 @@ function driveForcePush(){
   };
   _req();
 }
+
+// Re-authorize with explicit consent prompt, then push
+function _reAuthAndPush(){
+  _showToast('🔑 Please approve Drive access in the popup…');
+  window._pendingPush=true;
+  const _req=()=>{
+    if(!_gTokenClient){ _initTokenClient(); setTimeout(_req,500); return; }
+    // Use prompt:'consent' to force the consent screen — fixes stale/invalid token
+    _gTokenClient.requestAccessToken({prompt:'consent'});
+  };
+  _req();
+}
+
 function driveForcePull(){
   if(!confirm('Pull from Drive? This will overwrite your local data with the cloud version.')) return;
   if(_gAccessToken){
@@ -6651,32 +6670,52 @@ function gSignOut(){
 // ══ DRIVE SYNC ══════════════════════════════════════════════
 
 // Find or create clario3_data.json in Drive appDataFolder
+
+// XHR wrapper — used for Drive API calls to bypass security extension fetch() interception
+function _xhrFetch(method, url, headers, body){
+  return new Promise((resolve, reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    for(const [k,v] of Object.entries(headers||{})) xhr.setRequestHeader(k,v);
+    xhr.onload = ()=>{
+      resolve({
+        ok: xhr.status>=200 && xhr.status<300,
+        status: xhr.status,
+        json: ()=>Promise.resolve(JSON.parse(xhr.responseText)),
+        text: ()=>Promise.resolve(xhr.responseText)
+      });
+    };
+    xhr.onerror = ()=>reject(new TypeError('XHR network error: '+url.slice(0,60)));
+    xhr.ontimeout = ()=>reject(new TypeError('XHR timeout'));
+    xhr.timeout = 30000;
+    xhr.send(body||null);
+  });
+}
+
 async function _getDriveFileId(){
   if(_gDriveFileId) return _gDriveFileId;
-  // Check localStorage cache (set when file was first created)
+  // Check localStorage cache first
   const cached = localStorage.getItem('pc3_driveFileId');
   if(cached){ _gDriveFileId=cached; return cached; }
-  // Query Drive — list all matching files, newest first
-  const r = await fetch(
-    'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,createdTime)&orderBy=createdTime+desc&q=name%3D%22clario3_data.json%22',
-    { headers:{ Authorization:'Bearer '+_gAccessToken } }
+  // Query Drive via XHR (bypasses security extension fetch() interception)
+  const r = await _xhrFetch('GET',
+    'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&q=name%3D%22clario3_data.json%22',
+    { Authorization: 'Bearer '+_gAccessToken }
   );
   if(!r.ok){
     if(r.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); }
     throw new Error('Drive file lookup failed: '+r.status);
   }
-  const data=await r.json();
-  const files=data.files||[];
+  const data = await r.json();
+  const files = data.files||[];
   if(!files.length) return null;
-  // Use newest file; silently delete duplicates
-  _gDriveFileId=files[0].id;
+  _gDriveFileId = files[0].id;
   localStorage.setItem('pc3_driveFileId', _gDriveFileId);
+  // Delete duplicates silently
   if(files.length>1){
-    console.log('[Clario] Removing',files.length-1,'duplicate Drive file(s)');
     files.slice(1).forEach(f=>{
-      fetch('https://www.googleapis.com/drive/v3/files/'+f.id,
-        {method:'DELETE',headers:{Authorization:'Bearer '+_gAccessToken}}
-      ).catch(()=>{});
+      _xhrFetch('DELETE','https://www.googleapis.com/drive/v3/files/'+f.id,
+        {Authorization:'Bearer '+_gAccessToken}).catch(()=>{});
     });
   }
   return _gDriveFileId;
@@ -6684,54 +6723,54 @@ async function _getDriveFileId(){
 
 async function _driveUpload(payload){
   if(!_gAccessToken) throw new Error('No Drive token — please sign in');
-  const body=JSON.stringify(payload);
-  let fileId=await _getDriveFileId();
+  const body = JSON.stringify(payload);
+  let fileId = await _getDriveFileId();
 
   if(!fileId){
-    // Step 1: Create empty metadata-only file (application/json — no CORS preflight)
-    const cr=await fetch('https://www.googleapis.com/drive/v3/files',{
-      method:'POST',
-      headers:{Authorization:'Bearer '+_gAccessToken,'Content-Type':'application/json'},
-      body:JSON.stringify({name:_DRIVE_FILE,parents:['appDataFolder'],mimeType:'application/json'})
-    });
+    // Create file metadata via XHR
+    const cr = await _xhrFetch('POST',
+      'https://www.googleapis.com/drive/v3/files',
+      {Authorization:'Bearer '+_gAccessToken,'Content-Type':'application/json'},
+      JSON.stringify({name:_DRIVE_FILE,parents:['appDataFolder'],mimeType:'application/json'})
+    );
     if(!cr.ok){
       if(cr.status===401){_gAccessToken=null;localStorage.removeItem(_G_TOKEN_KEY);}
       throw new Error('Drive create failed: '+cr.status+' '+(await cr.text().catch(()=>'')).slice(0,80));
     }
-    const created=await cr.json();
-    _gDriveFileId=created.id;
-    fileId=created.id;
-    localStorage.setItem('pc3_driveFileId',fileId);
-    console.log('[Clario] Drive file created:',fileId);
-    // Fall through to PATCH below to write content into the new file
+    const created = await cr.json();
+    _gDriveFileId = created.id;
+    fileId = created.id;
+    localStorage.setItem('pc3_driveFileId', fileId);
+    console.log('[Clario] Drive file created:', fileId);
   }
 
-  // PATCH content — uploadType=media with Content-Type:application/json (CORS-safe)
-  const up=await fetch(
+  // Upload content via XHR
+  const up = await _xhrFetch('PATCH',
     'https://www.googleapis.com/upload/drive/v3/files/'+fileId+'?uploadType=media',
-    {method:'PATCH',headers:{Authorization:'Bearer '+_gAccessToken,'Content-Type':'application/json'},body}
+    {Authorization:'Bearer '+_gAccessToken,'Content-Type':'application/json'},
+    body
   );
   if(!up.ok){
-    const err=(await up.text().catch(()=>'')).slice(0,120);
+    const err = (await up.text().catch(()=>'')).slice(0,120);
     if(up.status===401){
-      _gAccessToken=null;localStorage.removeItem(_G_TOKEN_KEY);
-      _gDriveFileId=null;localStorage.removeItem('pc3_driveFileId');
+      _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY);
+      _gDriveFileId=null; localStorage.removeItem('pc3_driveFileId');
     }
     if(up.status===404){
-      // File was deleted from Drive — clear cache so next call recreates it
-      _gDriveFileId=null;localStorage.removeItem('pc3_driveFileId');
-      throw new Error('Drive file not found — will recreate on next sync');
+      _gDriveFileId=null; localStorage.removeItem('pc3_driveFileId');
+      throw new Error('Drive file not found (404) — will recreate on next sync');
     }
     throw new Error('Drive upload failed: '+up.status+' '+err);
   }
+  console.log('[Clario] Upload complete ✓ | calls:', (payload.calls||[]).length);
 }
 
 async function _driveDownload(){
   const fileId = await _getDriveFileId();
   if(!fileId) return null;
-  const r = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-    { headers: { Authorization: 'Bearer '+_gAccessToken } }
+  const r = await _xhrFetch('GET',
+    'https://www.googleapis.com/drive/v3/files/'+fileId+'?alt=media',
+    { Authorization: 'Bearer '+_gAccessToken }
   );
   if(!r.ok){
     if(r.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); _gDriveFileId=null; }
