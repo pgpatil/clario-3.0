@@ -6767,38 +6767,68 @@ async function _driveLoad(){
   try{
     const data = await _driveDownload();
     if(data){
-      const _r = (arr, val) => { arr.splice(0, arr.length, ...(val||[])); };
-      _r(tasks,        data.tasks||[]);
-      _r(events,       data.events||[]);
-      _r(projects,     data.projects||[]);
-      _r(notes,        data.notes||[]);
-      _r(people,       data.people||[]);
-      _r(customers,    data.customers||[]);
-      _r(depts,        data.depts||[]);
-      _r(calls,        data.calls||[]);
-      _r(dailyEntries, data.dailyEntries||[]);
-      _r(auditLog,     data.auditLog||[]);
+      // ── Merge helper: union by id, keep entry with newer updatedAt ──
+      // This prevents Drive from overwriting locally-added items not yet pushed.
+      const _merge = (localArr, driveArr) => {
+        const map = {};
+        // Index local items first
+        (localArr||[]).forEach(item => { if(item.id!=null) map[item.id]=item; });
+        // Overlay Drive items: keep whichever is newer
+        (driveArr||[]).forEach(item => {
+          if(item.id==null){ map['_'+Math.random()]=item; return; }
+          const local = map[item.id];
+          if(!local){ map[item.id]=item; return; }
+          const localT = new Date(local.updatedAt||local.createdAt||0).getTime();
+          const driveT = new Date(item.updatedAt||item.createdAt||0).getTime();
+          if(driveT >= localT) map[item.id]=item; // Drive wins on tie
+        });
+        return Object.values(map);
+      };
+
+      // ── Overwrite-safe replace: use merge for user-created entities ──
+      const _r  = (arr, val) => { arr.splice(0, arr.length, ...(val||[])); };
+      const _rm = (arr, local, drive) => { arr.splice(0, arr.length, ..._merge(local, drive)); };
+
+      _rm(calls,        calls,        data.calls);        // MERGE — critical
+      _rm(tasks,        tasks,        data.tasks);
+      _rm(events,       events,       data.events);
+      _rm(projects,     projects,     data.projects);
+      _rm(notes,        notes,        data.notes);
+      _rm(people,       people,       data.people);
+      _rm(customers,    customers,    data.customers);
+      _r(depts,         data.depts||[]);                  // simple lists — overwrite ok
+      _r(dailyEntries,  data.dailyEntries||[]);
+      _r(auditLog,      data.auditLog||[]);
       trash = data.trash||{tasks:[],events:[],notes:[],projects:[]};
+
+      // Take the MAX of local and Drive counters so IDs never collide
       if(data.ids){
-        nT=data.ids.nT||1; nE=data.ids.nE||1; nP=data.ids.nP||1;
-        nN=data.ids.nN||1; nPer=data.ids.nPer||1; nD=data.ids.nD||1; nC=data.ids.nC||1; nCl=data.ids.nCl||1;
+        nT  = Math.max(nT,  data.ids.nT||1);
+        nE  = Math.max(nE,  data.ids.nE||1);
+        nP  = Math.max(nP,  data.ids.nP||1);
+        nN  = Math.max(nN,  data.ids.nN||1);
+        nPer= Math.max(nPer,data.ids.nPer||1);
+        nD  = Math.max(nD,  data.ids.nD||1);
+        nC  = Math.max(nC,  data.ids.nC||1);
+        nCl = Math.max(nCl, data.ids.nCl||1);
       }
-      persist(); // write to localStorage as offline cache
+      persist(); // cache merged result locally + queue driveSync to push merged state
       renderView(currentView||'dashboard');
       updateStats();
+      _updateCallsBadge();
       setSyncDot('synced');
-      updateSyncInfo('Synced from Drive · ' + new Date().toLocaleTimeString());
+      updateSyncInfo('Synced · ' + new Date().toLocaleTimeString());
     } else {
-      // No cloud data yet — push local data to Drive
+      // No cloud data yet — push all local data to Drive now
       setSyncDot('synced');
-      updateSyncInfo('New workspace created');
+      updateSyncInfo('First sync — uploading local data…');
       await _driveUpload(syncState());
+      updateSyncInfo('Synced · ' + new Date().toLocaleTimeString());
     }
   } catch(e){
     setSyncDot('error');
-    updateSyncInfo('Could not load from Drive');
-    console.warn('Drive load error', e);
-    // Fall back to localStorage data (already loaded)
+    updateSyncInfo('Sync error — using local data');
+    console.warn('[Clario] Drive load error', e);
     renderView(currentView||'dashboard');
   }
 }
@@ -6851,8 +6881,13 @@ function _initTokenClient(){
         _updateDriveAdminStatus();
         return;
       }
-      // Normal flow: load cloud data on sign-in
+      // Normal flow: load+merge cloud data with local, then push merged result
       await _driveLoad();
+      // After merge, immediately push the merged state so Drive is up to date
+      // (handles case where calls were added offline and Drive had stale data)
+      await _driveUpload(syncState()).catch(e=>console.warn('[Clario] Post-merge push failed',e));
+      setSyncDot('synced');
+      updateSyncInfo('Synced · '+new Date().toLocaleTimeString());
     }
   });
 }
