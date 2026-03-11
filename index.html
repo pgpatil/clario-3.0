@@ -1117,6 +1117,8 @@ body.dark body.dark body.dark body.dark body.dark body.dark
 .inst-tip   { margin-top:12px; font-size:12px; color:#4f46e5; background:#eef2ff; border-radius:8px; padding:8px 12px; }
 .inst-btn   { margin-left:auto; background:linear-gradient(135deg,#4f46e5,#7c3aed); color:#fff; border:none; border-radius:10px; padding:8px 16px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; flex-shrink:0; }
 
+
+  @keyframes slideDown{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -2613,19 +2615,33 @@ function setCallFilter(f){
 function markCallDone(id){
   const c=calls.find(c=>c.id===id);if(!c)return;
   c.status='done';c.doneAt=new Date().toISOString();
-  persist();renderCalls();renderDashboard();
+  persist();
+  if(document.getElementById('view-calls')&&document.getElementById('view-calls').style.display!=='none') renderCalls();
+  renderDashboard();
+  _updateCallsBadge();
   _showToast('✅ Call marked done');
 }
 
+
+function _updateCallsBadge(){
+  const td=todayStr();
+  const count=calls.filter(c=>c.status!=='done'&&(c.date===td||c.date<td)).length;
+  const badge=document.getElementById('callsBadge');
+  if(badge){ badge.textContent=count||''; badge.style.display=count?'inline':'none'; }
+}
 function markCallPending(id){
   const c=calls.find(c=>c.id===id);if(!c)return;
   c.status='pending';c.doneAt=null;
-  persist();renderCalls();renderDashboard();
+  persist();
+  if(document.getElementById('view-calls')&&document.getElementById('view-calls').style.display!=='none') renderCalls();
+  renderDashboard();
+  _updateCallsBadge();
 }
 
 function deleteCall(id){
   if(!confirm('Delete this call?'))return;
-  calls=calls.filter(c=>c.id!==id);
+  const idx=calls.findIndex(c=>c.id===id);
+  if(idx>-1) calls.splice(idx,1);
   persist();renderCalls();renderDashboard();
 }
 
@@ -2644,24 +2660,40 @@ function openCallModal(id){
 }
 
 function closeCallModal(){
-  const m=document.getElementById('callModal');if(m)m.style.display='none';
+  const m=document.getElementById('callModal');
+  if(!m)return;
+  m.style.display='none';
+  // Clear form for next open
+  ['cm-name','cm-phone','cm-desc','cm-date','cm-id'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.value='';
+  });
 }
 
 function saveCall(){
   const id=parseInt(document.getElementById('cm-id').value)||null;
   const name=document.getElementById('cm-name').value.trim();
   if(!name){_showToast('⚠️ Name is required');return;}
-  const data={
-    name, phone:document.getElementById('cm-phone').value.trim(),
-    desc:document.getElementById('cm-desc').value.trim(),
-    date:document.getElementById('cm-date').value||todayStr(),
-    status:'pending'
-  };
   if(id){
     const c=calls.find(c=>c.id===id);
-    if(c){Object.assign(c,data);c.updatedAt=new Date().toISOString();}
+    if(c){
+      // Preserve status and createdAt — only update editable fields
+      c.name=name;
+      c.phone=document.getElementById('cm-phone').value.trim();
+      c.desc=document.getElementById('cm-desc').value.trim();
+      c.date=document.getElementById('cm-date').value||todayStr();
+      c.updatedAt=new Date().toISOString();
+    }
   } else {
-    calls.unshift({...data,id:nCl++,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+    calls.unshift({
+      id:nCl++,
+      name,
+      phone:document.getElementById('cm-phone').value.trim(),
+      desc:document.getElementById('cm-desc').value.trim(),
+      date:document.getElementById('cm-date').value||todayStr(),
+      status:'pending',
+      createdAt:new Date().toISOString(),
+      updatedAt:new Date().toISOString()
+    });
   }
   persist();closeCallModal();renderCalls();renderDashboard();
   _showToast(id?'✅ Call updated':'📞 Callback added');
@@ -2732,8 +2764,8 @@ function renderCallsStrip(){
       ${dateLabel?`<div class="call-card-date" style="${dateColor}">${dateLabel}</div>`:''}
       <div class="call-card-actions">
         ${!isDone
-          ?`<button class="btn btn-xs" style="background:var(--grn-l);color:var(--grn);border:1px solid var(--grn);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px" onclick="markCallDone(${c.id});renderCallsStrip()">✓ Done</button>`
-          :`<button class="btn bg btn-xs" onclick="markCallPending(${c.id});renderCallsStrip()" style="font-size:10px">↩ Reopen</button>`
+          ?`<button class="btn btn-xs" style="background:var(--grn-l);color:var(--grn);border:1px solid var(--grn);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px" onclick="markCallDone(${c.id})">✓ Done</button>`
+          :`<button class="btn bg btn-xs" onclick="markCallPending(${c.id})" style="font-size:10px">↩ Reopen</button>`
         }
         <button class="btn bg btn-xs" onclick="openCallModal(${c.id})" style="font-size:10px">Edit</button>
       </div>
@@ -4431,6 +4463,7 @@ function _initAllModalKeys(){
   _bindModalKeys('eventModal', saveEvent, closeEventModal);
   _bindModalKeys('deptModal', saveDept, closeDeptModal);
   _bindModalKeys('dailyModal', saveDailyEntry, closeDailyModal);
+  _bindModalKeys('callModal', saveCall, closeCallModal);
 }
 document.addEventListener('DOMContentLoaded', _initAllModalKeys);
 
@@ -6831,31 +6864,78 @@ async function _onGoogleSignIn(response){
   if(!payload) return;
 
   _gUserId = payload.sub;
-  const _90days = Math.floor(Date.now()/1000) + (90*24*3600);
+
+  // Check "Remember me" checkbox — default true if not found
+  const rememberMe = (()=>{
+    const chk = document.getElementById('rememberMeChk');
+    return chk ? chk.checked : true;
+  })();
+
+  const _90days  = Math.floor(Date.now()/1000) + (90*24*3600);
+  const _session = Math.floor(Date.now()/1000) + (8*3600); // 8h session if not remembered
   const _sessObj = JSON.stringify({
     sub: payload.sub,
     name: payload.name,
     email: payload.email,
     picture: payload.picture,
     credential: response.credential,
-    exp: _90days
+    exp: rememberMe ? _90days : _session,
+    rememberMe
   });
-  localStorage.setItem(_G_SESSION_KEY, _sessObj);
-  // sessionStorage as immediate fallback
+
+  // Always write to sessionStorage (survives tab refresh regardless of preference)
   try{ sessionStorage.setItem(_G_SESSION_KEY, _sessObj); }catch(e){}
-  // Cookie fallback for iOS PWA (Safari ITP clears localStorage on restart)
-  try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_sessObj)+';max-age='+(90*24*3600)+';path=/clario-3.0/;SameSite=Lax'; }catch(e){}
+
+  if(rememberMe){
+    // Persist across browser restarts: localStorage + cookie
+    localStorage.setItem(_G_SESSION_KEY, _sessObj);
+    try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_sessObj)+';max-age='+(90*24*3600)+';path=/clario-3.0/;SameSite=Lax'; }catch(e){}
+  }
+  // If not remembered: skip localStorage so next cold start shows login again
 
   _showUserInSidebar(payload);
   _hideLoginOverlay();
-  // Re-read localStorage data under this user's prefix first
   _reloadLocalData();
-  _showToast('👋 Welcome, ' + payload.given_name + '!');
 
-  // Now request Drive token (non-interactive if already granted)
+  // Confirmation: show appropriate welcome + save notice
+  if(rememberMe){
+    _showToast('👋 Welcome, ' + payload.given_name + '! Sign-in saved for 90 days.');
+    _showSaveConfirmBanner(payload.given_name, payload.email);
+  } else {
+    _showToast('👋 Welcome, ' + payload.given_name + '! (Session only — not saved)');
+  }
+
+  // Request Drive token silently
   if(_gTokenClient){
     _gTokenClient.requestAccessToken({ prompt: '' });
   }
+}
+
+function _showSaveConfirmBanner(name, email){
+  // Show a dismissible confirmation banner at top of app confirming session was saved
+  const existing = document.getElementById('saveConfirmBanner');
+  if(existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.id = 'saveConfirmBanner';
+  banner.style.cssText = [
+    'position:fixed','top:0','left:0','right:0','z-index:8000',
+    'background:#4f46e5','color:#fff','padding:10px 16px',
+    'display:flex','align-items:center','justify-content:space-between',
+    'gap:12px','font-size:13px','box-shadow:0 2px 12px rgba(79,70,229,.3)',
+    'animation:slideDown .3s ease'
+  ].join(';');
+  banner.innerHTML = `
+    <span style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:16px">✅</span>
+      <span><strong>Sign-in saved!</strong> You'll stay signed in as <strong>${name}</strong> (${email}) for 90 days.</span>
+    </span>
+    <button onclick="this.parentElement.remove()"
+      style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0">
+      Got it ✕
+    </button>`;
+  document.body.appendChild(banner);
+  // Auto-dismiss after 6 seconds
+  setTimeout(()=>{ if(banner.parentElement) banner.style.transition='opacity .5s'; banner.style.opacity='0'; setTimeout(()=>banner.remove(),500); }, 6000);
 }
 
 function _bypassSignIn(){
@@ -6940,9 +7020,14 @@ function _gBoot(){
         localStorage.setItem(_G_SESSION_KEY, _rolled);
         try{ sessionStorage.setItem(_G_SESSION_KEY, _rolled); }catch(e){}
         try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_rolled)+';max-age='+(90*24*3600)+';path=/clario-3.0/;SameSite=Lax'; }catch(e){}
-        // Get fresh Drive token in background — if it fails, we still show the app
-        // Request a fresh Drive token silently (no popup if user already authorised)
-        // Never reuse a stored token — Google tokens expire after 1 hour
+        // Subtle "still signed in" toast on return visits
+        const _isFirstVisitToday = !localStorage.getItem('pc3_lastVisit') ||
+          localStorage.getItem('pc3_lastVisit') !== new Date().toDateString();
+        if(_isFirstVisitToday){
+          localStorage.setItem('pc3_lastVisit', new Date().toDateString());
+          setTimeout(()=>_showToast('👤 Signed in as ' + (s.name||'you') + ' · session active'), 800);
+        }
+        // Request fresh Drive token silently
         const _tryToken = () => {
           if(!_gTokenClient){ _initTokenClient(); setTimeout(_tryToken, 500); return; }
           _gTokenClient.requestAccessToken({ prompt:'' });
@@ -7660,11 +7745,17 @@ function _appStart(){
       </div>
     </div>
     <div id="gSignInLoading" style="font-size:12px;color:#94a3b8;margin-top:4px">Loading sign-in…</div>
-    <p style="margin:20px 0 0;font-size:11px;color:#94a3b8;line-height:1.5">Your data stays on this device.<br>Sign in to personalize your workspace.</p>
-    <div style="margin-top:12px">
+    <!-- Remember me -->
+    <label id="rememberMeRow" style="display:flex;align-items:center;justify-content:center;gap:8px;margin:16px 0 0;cursor:pointer;user-select:none">
+      <input type="checkbox" id="rememberMeChk" checked
+        style="width:16px;height:16px;accent-color:#4f46e5;cursor:pointer;flex-shrink:0">
+      <span style="font-size:13px;color:#475569;font-weight:500">Remember me on this device</span>
+    </label>
+    <p style="margin:10px 0 0;font-size:11px;color:#94a3b8;line-height:1.5">Your data stays on this device.<br>Sign in once to sync across sessions.</p>
+    <div style="margin-top:10px">
       <span style="font-size:11px;color:#cbd5e1;cursor:pointer;text-decoration:underline"
-        onclick="localStorage.removeItem('pc3_gsession');localStorage.removeItem('pc3_gtoken');location.reload()">
-        Clear session &amp; reload
+        onclick="localStorage.removeItem('pc3_gsession');localStorage.removeItem('pc3_gtoken');sessionStorage.removeItem('pc3_gsession');location.reload()">
+        Sign out &amp; clear session
       </span>
     </div>
   </div>
