@@ -45,7 +45,7 @@
 // Inline Service Worker — enables offline use & Add to Home Screen
 if('serviceWorker' in navigator){
   const sw=`
-    const CACHE='clario3-v4';
+    const CACHE='clario3-v5';
     self.addEventListener('install',e=>{
       e.waitUntil(caches.open(CACHE).then(c=>c.add(self.location.pathname)).then(()=>self.skipWaiting()));
     });
@@ -6841,8 +6841,10 @@ async function _onGoogleSignIn(response){
     exp: _90days
   });
   localStorage.setItem(_G_SESSION_KEY, _sessObj);
+  // sessionStorage as immediate fallback
+  try{ sessionStorage.setItem(_G_SESSION_KEY, _sessObj); }catch(e){}
   // Cookie fallback for iOS PWA (Safari ITP clears localStorage on restart)
-  try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_sessObj)+';max-age='+(90*24*3600)+';path=/;SameSite=Strict'; }catch(e){}
+  try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_sessObj)+';max-age='+(90*24*3600)+';path=/clario-3.0/;SameSite=Lax'; }catch(e){}
 
   _showUserInSidebar(payload);
   _hideLoginOverlay();
@@ -6859,10 +6861,13 @@ async function _onGoogleSignIn(response){
 function _bypassSignIn(){
   // Enter app as guest (no Google account — data stays local only)
   _gUserId = 'guest';
-  localStorage.setItem(_G_SESSION_KEY, JSON.stringify({
+  const _guestSess = JSON.stringify({
     sub: 'guest', name: 'Guest User', email: '', picture: '',
-    exp: Math.floor(Date.now()/1000) + (365*24*3600) // 1 year
-  }));
+    exp: Math.floor(Date.now()/1000) + (365*24*3600)
+  });
+  localStorage.setItem(_G_SESSION_KEY, _guestSess);
+  try{ sessionStorage.setItem(_G_SESSION_KEY, _guestSess); }catch(e){}
+  try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_guestSess)+';max-age='+(365*24*3600)+';path=/clario-3.0/;SameSite=Lax'; }catch(e){}
   _reloadLocalData();
   _showUserInSidebar({name:'Guest User', email:'Local only — sign in for sync', picture:''});
   _hideLoginOverlay();
@@ -6895,17 +6900,27 @@ function _reloadUserData(){ _reloadLocalData(); }
 // ══ BOOT ════════════════════════════════════════════════════
 
 function _gBoot(){
-  console.log('[PC] _gBoot called. _gsiReady=', window._gsiReady, 'session=', !!localStorage.getItem(_G_SESSION_KEY));
-  // Clear any stale/broken session that might loop
+  const _dbgSess = localStorage.getItem(_G_SESSION_KEY);
+  let _dbgSessObj = null;
+  try{ _dbgSessObj = _dbgSess ? JSON.parse(_dbgSess) : null; }catch(e){}
+  console.log('[Clario] Boot — session key:', _G_SESSION_KEY,
+    '| found:', !!_dbgSess,
+    '| sub:', _dbgSessObj?.sub||'none',
+    '| exp:', _dbgSessObj?.exp ? new Date(_dbgSessObj.exp*1000).toLocaleString() : 'none',
+    '| valid:', _dbgSessObj?.exp ? (Date.now()/1000 < _dbgSessObj.exp) : false
+  );
   let validSession = false;
   // Try localStorage first, then cookie fallback (iOS PWA ITP fix)
   let sess = localStorage.getItem(_G_SESSION_KEY);
+  // Fallback 1: sessionStorage (same tab, survives soft navigation)
+  if(!sess){ try{ sess=sessionStorage.getItem(_G_SESSION_KEY); if(sess) localStorage.setItem(_G_SESSION_KEY,sess); }catch(e){} }
+  // Fallback 2: cookie (iOS PWA ITP — Safari clears localStorage on restart)
   if(!sess){
     try{
       const match = document.cookie.split(';').find(c=>c.trim().startsWith(_G_SESSION_KEY+'='));
       if(match){ 
         sess = decodeURIComponent(match.trim().slice(_G_SESSION_KEY.length+1));
-        if(sess) localStorage.setItem(_G_SESSION_KEY, sess); // restore to localStorage
+        if(sess){ localStorage.setItem(_G_SESSION_KEY, sess); sessionStorage.setItem(_G_SESSION_KEY, sess); }
       }
     }catch(e){}
   }
@@ -6923,7 +6938,8 @@ function _gBoot(){
         s.exp = Math.floor(Date.now()/1000) + (90*24*3600);
         const _rolled = JSON.stringify(s);
         localStorage.setItem(_G_SESSION_KEY, _rolled);
-        try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_rolled)+';max-age='+(90*24*3600)+';path=/;SameSite=Strict'; }catch(e){}
+        try{ sessionStorage.setItem(_G_SESSION_KEY, _rolled); }catch(e){}
+        try{ document.cookie = _G_SESSION_KEY+'='+encodeURIComponent(_rolled)+';max-age='+(90*24*3600)+';path=/clario-3.0/;SameSite=Lax'; }catch(e){}
         // Get fresh Drive token in background — if it fails, we still show the app
         // Request a fresh Drive token silently (no popup if user already authorised)
         // Never reuse a stored token — Google tokens expire after 1 hour
@@ -7620,7 +7636,7 @@ function _appStart(){
     data-context="signin"
     data-ux_mode="popup"
     data-callback="_onGoogleSignIn"
-    data-auto_select="false"
+    data-auto_select="true"
     data-itp_support="true"
     data-cancel_on_tap_outside="false">
   </div>
