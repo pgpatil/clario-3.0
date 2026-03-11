@@ -6069,11 +6069,18 @@ function driveForcePull(){
   _req();
 }
 function _updateDriveAdminStatus(){
-  const infoEl = document.getElementById('syncInfoAdmin');
-  const dotEl  = document.getElementById('syncDotAdmin');
-  const last   = localStorage.getItem('pc3_syncedAt');
-  if(infoEl) infoEl.textContent = last ? 'Last sync: '+new Date(last).toLocaleTimeString() : 'Not synced yet';
-  if(dotEl)  dotEl.className = 'sync-dot ' + (_gAccessToken ? 'synced' : '');
+  const infoEl=document.getElementById('syncInfoAdmin');
+  const dotEl=document.getElementById('syncDotAdmin');
+  const last=localStorage.getItem('pc3_syncedAt');
+  const fid=localStorage.getItem('pc3_driveFileId');
+  const pending=calls.filter(c=>c.status!=='done').length;
+  const info=[
+    last?'Last sync: '+new Date(last).toLocaleTimeString():'Not synced yet',
+    'Calls: '+calls.length+' ('+pending+' pending)',
+    fid?'File ID: '+fid.slice(0,12)+'…':'No Drive file yet'
+  ].join(' · ');
+  if(infoEl) infoEl.textContent=info;
+  if(dotEl) dotEl.className='sync-dot '+(_gAccessToken?'synced':'');
 }
 
 
@@ -6628,6 +6635,7 @@ function _hideLoginOverlay(){
 function gSignOut(){
   // Clear cookie too
   try{ document.cookie = _G_SESSION_KEY+'=;max-age=0;path=/'; }catch(e){}
+  localStorage.removeItem('pc3_driveFileId');
   if(typeof google !== 'undefined') google.accounts.id.disableAutoSelect();
   if(_gAccessToken && typeof google !== 'undefined')
     google.accounts.oauth2.revoke(_gAccessToken, ()=>{});
@@ -6645,75 +6653,79 @@ function gSignOut(){
 // Find or create clario3_data.json in Drive appDataFolder
 async function _getDriveFileId(){
   if(_gDriveFileId) return _gDriveFileId;
+  // Check localStorage cache (set when file was first created)
+  const cached = localStorage.getItem('pc3_driveFileId');
+  if(cached){ _gDriveFileId=cached; return cached; }
+  // Query Drive — list all matching files, newest first
   const r = await fetch(
-    'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&q=name%3D%22clario3_data.json%22',
-    { headers: { Authorization: 'Bearer ' + _gAccessToken } }
+    'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,createdTime)&orderBy=createdTime+desc&q=name%3D%22clario3_data.json%22',
+    { headers:{ Authorization:'Bearer '+_gAccessToken } }
   );
   if(!r.ok){
     if(r.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); }
     throw new Error('Drive file lookup failed: '+r.status);
   }
-  const data = await r.json();
-  if(data.files && data.files.length > 0){
-    _gDriveFileId = data.files[0].id;
-    return _gDriveFileId;
+  const data=await r.json();
+  const files=data.files||[];
+  if(!files.length) return null;
+  // Use newest file; silently delete duplicates
+  _gDriveFileId=files[0].id;
+  localStorage.setItem('pc3_driveFileId', _gDriveFileId);
+  if(files.length>1){
+    console.log('[Clario] Removing',files.length-1,'duplicate Drive file(s)');
+    files.slice(1).forEach(f=>{
+      fetch('https://www.googleapis.com/drive/v3/files/'+f.id,
+        {method:'DELETE',headers:{Authorization:'Bearer '+_gAccessToken}}
+      ).catch(()=>{});
+    });
   }
-  return null;
+  return _gDriveFileId;
 }
 
-// Upload data to Drive (create or update)
 async function _driveUpload(payload){
   if(!_gAccessToken) throw new Error('No Drive token — please sign in');
-  const body = JSON.stringify(payload);
-  let fileId = await _getDriveFileId();
+  const body=JSON.stringify(payload);
+  let fileId=await _getDriveFileId();
 
   if(!fileId){
-    // File doesn't exist yet — create it in appDataFolder
-    const createResp = await fetch(
-      'https://www.googleapis.com/drive/v3/files',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: 'Bearer '+_gAccessToken,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ name: _DRIVE_FILE, parents: ['appDataFolder'] })
-      }
-    );
-    if(!createResp.ok){
-      if(createResp.status===401){ _gAccessToken=null; localStorage.removeItem(_G_TOKEN_KEY); }
-      const t=await createResp.text().catch(()=>'');
-      throw new Error('Drive create failed: '+createResp.status+' '+t.slice(0,80));
+    // Step 1: Create empty metadata-only file (application/json — no CORS preflight)
+    const cr=await fetch('https://www.googleapis.com/drive/v3/files',{
+      method:'POST',
+      headers:{Authorization:'Bearer '+_gAccessToken,'Content-Type':'application/json'},
+      body:JSON.stringify({name:_DRIVE_FILE,parents:['appDataFolder'],mimeType:'application/json'})
+    });
+    if(!cr.ok){
+      if(cr.status===401){_gAccessToken=null;localStorage.removeItem(_G_TOKEN_KEY);}
+      throw new Error('Drive create failed: '+cr.status+' '+(await cr.text().catch(()=>'')).slice(0,80));
     }
-    const created = await createResp.json();
-    _gDriveFileId = created.id;
-    fileId = _gDriveFileId;
+    const created=await cr.json();
+    _gDriveFileId=created.id;
+    fileId=created.id;
+    localStorage.setItem('pc3_driveFileId',fileId);
+    console.log('[Clario] Drive file created:',fileId);
+    // Fall through to PATCH below to write content into the new file
   }
 
-  // Upload content
-  const uploadResp = await fetch(
-    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-    {
-      method: 'PATCH',
-      headers: {
-        Authorization: 'Bearer '+_gAccessToken,
-        'Content-Type': 'application/json'
-      },
-      body
-    }
+  // PATCH content — uploadType=media with Content-Type:application/json (CORS-safe)
+  const up=await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files/'+fileId+'?uploadType=media',
+    {method:'PATCH',headers:{Authorization:'Bearer '+_gAccessToken,'Content-Type':'application/json'},body}
   );
-  if(!uploadResp.ok){
-    const errText = await uploadResp.text().catch(()=>'');
-    if(uploadResp.status===401){
-      _gAccessToken=null;
-      localStorage.removeItem(_G_TOKEN_KEY);
-      _gDriveFileId=null;
+  if(!up.ok){
+    const err=(await up.text().catch(()=>'')).slice(0,120);
+    if(up.status===401){
+      _gAccessToken=null;localStorage.removeItem(_G_TOKEN_KEY);
+      _gDriveFileId=null;localStorage.removeItem('pc3_driveFileId');
     }
-    throw new Error('Drive upload failed: '+uploadResp.status+' '+errText.slice(0,80));
+    if(up.status===404){
+      // File was deleted from Drive — clear cache so next call recreates it
+      _gDriveFileId=null;localStorage.removeItem('pc3_driveFileId');
+      throw new Error('Drive file not found — will recreate on next sync');
+    }
+    throw new Error('Drive upload failed: '+up.status+' '+err);
   }
 }
 
-// Download data from Drive
 async function _driveDownload(){
   const fileId = await _getDriveFileId();
   if(!fileId) return null;
@@ -7789,7 +7801,7 @@ function _appStart(){
     <p style="margin:10px 0 0;font-size:11px;color:#94a3b8;line-height:1.5">Your data stays on this device.<br>Sign in once to sync across sessions.</p>
     <div style="margin-top:10px">
       <span style="font-size:11px;color:#cbd5e1;cursor:pointer;text-decoration:underline"
-        onclick="localStorage.removeItem('pc3_gsession');localStorage.removeItem('pc3_gtoken');sessionStorage.removeItem('pc3_gsession');location.reload()">
+        onclick="localStorage.removeItem('pc3_gsession');localStorage.removeItem('pc3_gtoken');localStorage.removeItem('pc3_driveFileId');sessionStorage.removeItem('pc3_gsession');location.reload()">
         Sign out &amp; clear session
       </span>
     </div>
