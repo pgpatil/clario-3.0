@@ -2616,7 +2616,7 @@ function setCallFilter(f){
 
 function markCallDone(id){
   const c=calls.find(c=>c.id===id);if(!c)return;
-  c.status='done';c.doneAt=new Date().toISOString();
+  c.status='done';c.doneAt=new Date().toISOString();c.updatedAt=new Date().toISOString();
   persist();
   if(document.getElementById('view-calls')&&document.getElementById('view-calls').style.display!=='none') renderCalls();
   renderDashboard();
@@ -2633,7 +2633,7 @@ function _updateCallsBadge(){
 }
 function markCallPending(id){
   const c=calls.find(c=>c.id===id);if(!c)return;
-  c.status='pending';c.doneAt=null;
+  c.status='pending';c.doneAt=null;c.updatedAt=new Date().toISOString();
   persist();
   if(document.getElementById('view-calls')&&document.getElementById('view-calls').style.display!=='none') renderCalls();
   renderDashboard();
@@ -6694,7 +6694,15 @@ async function _driveRequest(method, path, params, body){
   return {
     ok: resp.status >= 200 && resp.status < 300,
     status: resp.status,
-    json: ()=>Promise.resolve(typeof resp.result === 'string' ? JSON.parse(resp.result) : resp.result),
+    json: ()=>{
+      // gapi puts media-download content in resp.body (string), not resp.result
+      // Try resp.result first (works if gapi auto-parsed JSON), then fall back to resp.body
+      if(resp.result && typeof resp.result === 'object' && Object.keys(resp.result).length > 0)
+        return Promise.resolve(resp.result);
+      const raw = (typeof resp.body === 'string' && resp.body.trim()) || (typeof resp.result === 'string' && resp.result.trim());
+      if(raw){ try{ return Promise.resolve(JSON.parse(raw)); }catch(e){ return Promise.resolve(null); } }
+      return Promise.resolve(null);
+    },
     text: ()=>Promise.resolve(typeof resp.body === 'string' ? resp.body : JSON.stringify(resp.result))
   };
 }
@@ -6804,7 +6812,8 @@ async function _driveDownload(){
 
 // Public: trigger a debounced sync to Drive
 function _autoRefreshToken(){
-  if(!_gTokenClient || !_gUserId) return;
+  // Only refresh if we already have a token — prevents surprise popups on Windows
+  if(!_gTokenClient || !_gUserId || !_gAccessToken) return;
   try{
     _gTokenClient.requestAccessToken({ prompt:'' });
     console.log('[Clario] Token auto-refreshed');
@@ -7014,10 +7023,12 @@ async function _onGoogleSignIn(response){
     _showToast('👋 Welcome, ' + payload.given_name + '! (Session only — not saved)');
   }
 
-  // Request Drive token silently
-  if(_gTokenClient){
+  // Request Drive token — ensure token client is ready first
+  const _reqToken = () => {
+    if(!_gTokenClient){ _initTokenClient(); setTimeout(_reqToken, 300); return; }
     _gTokenClient.requestAccessToken({ prompt: '' });
-  }
+  };
+  _reqToken();
 }
 
 function _showSaveConfirmBanner(name, email){
@@ -7136,13 +7147,13 @@ function _gBoot(){
           localStorage.setItem('pc3_lastVisit', new Date().toDateString());
           setTimeout(()=>_showToast('👤 Signed in as ' + (s.name||'you') + ' · session active'), 800);
         }
-        // Request fresh Drive token silently
+        // Request fresh Drive token silently — init token client immediately (don't wait for _gsiReady)
+        _initTokenClient(); // start initializing right away
         const _tryToken = () => {
-          if(!_gTokenClient){ _initTokenClient(); setTimeout(_tryToken, 500); return; }
+          if(!_gTokenClient){ setTimeout(_tryToken, 300); return; }
           _gTokenClient.requestAccessToken({ prompt:'' });
         };
-        if(window._gsiReady) setTimeout(_tryToken, 800);
-        else { setTimeout(()=>{ _initTokenClient(); setTimeout(_tryToken,500); }, 1000); }
+        setTimeout(_tryToken, 400); // short delay for _initTokenClient to complete
         return;
       } else {
         // Session expired — clear it
