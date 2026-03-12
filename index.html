@@ -6346,8 +6346,9 @@ async function pullFromCloud(){
     tasks=d.tasks||[];events=d.events||[];projects=d.projects||[];notes=d.notes||[];
     people=d.people||[];depts=d.depts||D_DEPTS;dailyEntries=d.dailyEntries||[];
     trash=d.trash||{tasks:[],events:[],notes:[],projects:[]};auditLog=d.auditLog||[];
-    customers=d.customers||[];if(d.ids){nT=d.ids.nT||1;nE=d.ids.nE||1;nP=d.ids.nP||1;nN=d.ids.nN||1;nPer=d.ids.nPer||1;nD=d.ids.nD||1;nC=d.ids.nC||1;}
-    persist();renderView(currentView);updateStats();
+    customers=d.customers||[];calls=d.calls||[];
+    if(d.ids){nT=d.ids.nT||1;nE=d.ids.nE||1;nP=d.ids.nP||1;nN=d.ids.nN||1;nPer=d.ids.nPer||1;nD=d.ids.nD||1;nC=d.ids.nC||1;nCl=d.ids.nCl||1;}
+    persist();renderView(currentView);updateStats();_updateCallsBadge();
     setSyncDot('synced');updateSyncInfo('Pulled ✓ '+new Date().toLocaleTimeString());
   }catch(e){
     setSyncDot('error');updateSyncInfo('Pull failed: '+e.message);
@@ -6366,9 +6367,10 @@ async function pullById(binId){
     tasks=d.tasks||[];events=d.events||[];projects=d.projects||[];notes=d.notes||[];
     people=d.people||[];depts=d.depts||D_DEPTS;dailyEntries=d.dailyEntries||[];
     trash=d.trash||{tasks:[],events:[],notes:[],projects:[]};auditLog=d.auditLog||[];
-    customers=d.customers||[];if(d.ids){nT=d.ids.nT||1;nE=d.ids.nE||1;nP=d.ids.nP||1;nN=d.ids.nN||1;nPer=d.ids.nPer||1;nD=d.ids.nD||1;nC=d.ids.nC||1;}
+    customers=d.customers||[];calls=d.calls||[];
+    if(d.ids){nT=d.ids.nT||1;nE=d.ids.nE||1;nP=d.ids.nP||1;nN=d.ids.nN||1;nPer=d.ids.nPer||1;nD=d.ids.nD||1;nC=d.ids.nC||1;nCl=d.ids.nCl||1;}
     localStorage.setItem('pc3_binId',binId);
-    persist();renderView(currentView);updateStats();
+    persist();renderView(currentView);updateStats();_updateCallsBadge();
     setSyncDot('synced');updateSyncInfo('Connected ✓');
     document.getElementById('pullBtn').style.display='';
     closeSyncModal();
